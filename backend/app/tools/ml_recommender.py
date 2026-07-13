@@ -32,6 +32,12 @@ _TARGET_NAME_CANDIDATES = {"target", "label", "class", "y"}
 _ID_LIKE_UNIQUENESS_RATIO = 0.95
 _LOW_CARDINALITY_MAX_UNIQUE = 20
 _LOW_CARDINALITY_MAX_RATIO = 0.05
+# Below this absolute unique-value count, a numeric target is treated as
+# categorical regardless of the unique/total ratio -- e.g. a binary 0/1
+# target in a 12-row dataset has ratio 0.167 (fails the 0.05 check) but is
+# unambiguously a class label, not a continuous quantity. The ratio check
+# only earns its keep for disambiguating the 11-20 unique value range.
+_ALWAYS_LOW_CARDINALITY_MAX_UNIQUE = 10
 
 # --- Stage B thresholds ------------------------------------------------------
 
@@ -95,6 +101,12 @@ def _detect_problem_type(df: pd.DataFrame, target_column: Optional[str]) -> tupl
         return "classification", (
             f"Target '{target_column}' has dtype {df[target_column].dtype} (non-numeric) with "
             f"{nunique} unique values, so it's treated as a set of class labels."
+        )
+
+    if nunique <= _ALWAYS_LOW_CARDINALITY_MAX_UNIQUE:
+        return "classification", (
+            f"Target '{target_column}' is numeric but has only {nunique} unique values, which reads "
+            "as encoded class labels regardless of dataset size, rather than a continuous quantity."
         )
 
     if nunique <= _LOW_CARDINALITY_MAX_UNIQUE and ratio < _LOW_CARDINALITY_MAX_RATIO:

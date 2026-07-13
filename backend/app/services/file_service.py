@@ -56,3 +56,15 @@ def resolve_upload_path(file_id: str) -> Path:
 def resolve_report_path(file_id: str) -> Path:
     """Return the path where analysis results for a file_id are/will be stored."""
     return Config.REPORTS_FOLDER / f"{file_id}.json"
+
+
+def resolve_cleaned_file_path(file_id: str) -> Path:
+    """Return the on-disk path for a previously cleaned file_id's output CSV.
+
+    Raises:
+        FileServiceError: if no cleaned file exists for that file_id.
+    """
+    path = Config.CLEANED_FILES_FOLDER / f"{file_id}_cleaned.csv"
+    if not path.exists():
+        raise FileServiceError(f"No cleaned file found for file_id='{file_id}'. Run /analyze first.")
+    return path
