@@ -1,0 +1,55 @@
+# Python
+backend/venv/
+backend/.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment secrets
+backend/.env
+frontend/.env.local
+frontend/.env*.local
+
+# Logs
+*.log
+backend/server.log
+
+# Generated data (uploaded files and analysis outputs)
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/outputs/cleaned_files/*
+backend/outputs/charts/*
+backend/outputs/reports/*
+!backend/outputs/cleaned_files/.gitkeep
+!backend/outputs/charts/.gitkeep
+!backend/outputs/reports/.gitkeep
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.turbo/
+frontend/next-env.d.ts
+
+# Docker
+*.pid
+
+# Claude Code local settings (machine-specific, not shared)
+.claude/settings.local.json
+backend/.claude/settings.local.json
+frontend/.claude/settings.local.json
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
