@@ -12,10 +12,17 @@ class UploadResponse(BaseModel):
     columns: int
 
 
+class DataValidity(BaseModel):
+    valid: bool
+    errors: list[str] = []
+    warnings: list[str] = []
+
+
 class AnalyzeResponse(BaseModel):
     file_id: str
     status: str
     profile: Optional[dict[str, Any]] = None
+    data_validity: Optional[DataValidity] = None
     report: Optional[str] = None
     cleaning_plan: Optional[Any] = None
     cleaned_file: Optional[str] = None
@@ -26,6 +33,7 @@ class AnalyzeResponse(BaseModel):
 class ResultsResponse(BaseModel):
     file_id: str
     profile: Optional[dict[str, Any]] = None
+    data_validity: Optional[DataValidity] = None
     report: Optional[str] = None
     cleaning_plan: Optional[Any] = None
     cleaned_file: Optional[str] = None

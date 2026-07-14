@@ -14,8 +14,13 @@ class AnalystState(TypedDict, total=False):
     file_path: str
     file_id: str
     profile: dict[str, Any]
+    target_column: Optional[str]
+    target_reasoning: Optional[str]
+    identifier_columns: Optional[list[str]]
+    data_validity: Optional[dict[str, Any]]
     cleaning_plan: Any
     cleaned_file: Optional[str]
+    viz_file: Optional[str]
     charts: Optional[list[str]]
     report: Optional[str]
     recommendations: Optional[Any]

@@ -83,6 +83,7 @@ async def analyze_csv(file_id: str) -> AnalyzeResponse:
         file_id=file_id,
         status="completed",
         profile=result_state.get("profile"),
+        data_validity=result_state.get("data_validity"),
         report=result_state.get("report"),
         cleaning_plan=result_state.get("cleaning_plan"),
         cleaned_file=f"/download/{file_id}" if result_state.get("cleaned_file") else None,
@@ -104,6 +105,7 @@ async def get_results(file_id: str) -> ResultsResponse:
     return ResultsResponse(
         file_id=file_id,
         profile=data.get("profile"),
+        data_validity=data.get("data_validity"),
         report=data.get("report"),
         cleaning_plan=data.get("cleaning_plan"),
         cleaned_file=f"/download/{file_id}" if data.get("cleaned_file") else None,

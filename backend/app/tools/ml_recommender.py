@@ -16,6 +16,8 @@ Two stages:
 
 from typing import Any, Optional
 
+import re
+
 import pandas as pd
 
 from app.tools.profiler import ProfilerError, load_dataframe
@@ -25,7 +27,16 @@ logger = get_logger(__name__)
 
 # --- Stage A thresholds -----------------------------------------------------
 
-_TARGET_NAME_CANDIDATES = {"target", "label", "class", "y"}
+_TARGET_NAME_CANDIDATES = {"target", "label", "class", "outcome", "result", "y", "response"}
+# Column-name substrings that mark a column as a likely identifier (CLAUDE.md
+# Known Bugs, Issue 4). Matched against word-ish tokens in the name so that
+# 'Age' doesn't match 'id'/'e' and 'income' doesn't match 'code'.
+_ID_NAME_PATTERNS = ("id", "uuid", "email", "phone", "name", "number", "code",
+                     "customer", "user", "transaction")
+# Above this unique/total ratio a *non-numeric* column reads as an identifier
+# (every row a distinct string). Applied to numeric columns would wrongly flag
+# genuinely continuous features in small datasets, so it's object-dtype only.
+_ID_UNIQUENESS_RATIO = 0.8
 # A last-column fallback target is rejected if it looks like a unique
 # identifier (e.g. a primary key) rather than a label -- nearly every row
 # having a distinct value is the tell.
@@ -53,7 +64,7 @@ class MLRecommenderError(Exception):
     """Raised when a dataset cannot be reasoned about for algorithm recommendations."""
 
 
-def _detect_target_column(df: pd.DataFrame) -> tuple[Optional[str], str]:
+def detect_target_column(df: pd.DataFrame) -> tuple[Optional[str], str]:
     """Identify a likely target column, or determine none exists (CLAUDE.md §9 Stage A).
 
     Returns:
@@ -73,7 +84,13 @@ def _detect_target_column(df: pd.DataFrame) -> tuple[Optional[str], str]:
     nunique = df[last_column].nunique(dropna=True)
     uniqueness_ratio = (nunique / total) if total else 0.0
 
-    if uniqueness_ratio >= _ID_LIKE_UNIQUENESS_RATIO:
+    # A high uniqueness ratio only reads as an *identifier* for integer or
+    # non-numeric columns (primary keys, hashes, record codes). A continuous
+    # float column with near-unique values is the natural shape of a
+    # regression target (e.g. a Price), not an ID -- excluding floats here
+    # keeps regression targets from being mistaken for identifiers.
+    is_float = pd.api.types.is_float_dtype(df[last_column])
+    if uniqueness_ratio >= _ID_LIKE_UNIQUENESS_RATIO and not is_float:
         return None, (
             f"No explicitly named target column found, and the last column '{last_column}' looks like a "
             f"unique identifier ({uniqueness_ratio:.2f} unique/total ratio) rather than a label; "
@@ -86,10 +103,80 @@ def _detect_target_column(df: pd.DataFrame) -> tuple[Optional[str], str]:
     )
 
 
+def _name_matches_identifier(column: str) -> bool:
+    """True if the column name contains an identifier-like token (word-boundary aware)."""
+    tokens = re.split(r"[^a-z0-9]+", column.strip().lower())
+    return any(token in _ID_NAME_PATTERNS for token in tokens if token)
+
+
+def is_identifier_column(col_name: str, series: pd.Series, total_rows: int) -> bool:
+    """Decide whether a column is an identifier rather than a usable feature (Issue 4).
+
+    A column qualifies if EITHER its name looks like an identifier (contains a
+    token such as 'id', 'name', 'email', 'code', ...), OR it is a non-numeric
+    column whose values are almost all distinct (a uniqueness ratio above
+    `_ID_UNIQUENESS_RATIO`). The uniqueness rule is deliberately restricted to
+    non-numeric columns: a small dataset can have a genuinely continuous
+    numeric feature (e.g. Income) where every value is unique, and that must
+    not be mistaken for an identifier.
+    """
+    if _name_matches_identifier(col_name):
+        return True
+    if pd.api.types.is_numeric_dtype(series):
+        return False
+    uniqueness_ratio = (series.nunique(dropna=True) / total_rows) if total_rows else 0.0
+    return uniqueness_ratio > _ID_UNIQUENESS_RATIO
+
+
+def detect_identifier_columns(df: pd.DataFrame, target_column: Optional[str]) -> list[str]:
+    """Return the columns that look like identifiers and should be excluded (Issue 4).
+
+    The target column is never treated as an identifier even if its name or
+    cardinality would otherwise match -- it has already been validated as a
+    usable label by the time this runs.
+    """
+    total_rows = len(df)
+    identifiers = []
+    for column in df.columns:
+        if column == target_column:
+            continue
+        if is_identifier_column(column, df[column], total_rows):
+            identifiers.append(column)
+    return identifiers
+
+
+def check_target_cardinality(df: pd.DataFrame, target_column: str) -> Optional[str]:
+    """Return an error message if the target column can't support modeling, else None.
+
+    Single source of truth for the "is this target usable at all" check --
+    used both as the Stage A backstop below and by `validator.py`'s
+    dataset-level validity gate (CLAUDE.md Known Bugs, Issues 1 and 6a), so
+    there is exactly one place that decides what "single/zero-class target"
+    means.
+    """
+    series = df[target_column].dropna()
+    if series.empty:
+        return f"Target column '{target_column}' is entirely missing/null."
+    nunique = series.nunique()
+    if nunique <= 1:
+        return (
+            f"Target column '{target_column}' contains only {nunique} unique value(s) in "
+            f"{len(series)} non-null row(s). A predictive model cannot learn from a single-class target."
+        )
+    return None
+
+
 def _detect_problem_type(df: pd.DataFrame, target_column: Optional[str]) -> tuple[str, str]:
-    """Classify the problem as classification, regression, or clustering (Stage A)."""
+    """Classify the problem as classification, regression, clustering, or invalid (Stage A)."""
     if target_column is None:
-        return "clustering", "No usable target column was identified, so this is treated as unsupervised."
+        return "unknown", (
+            "No explicit target column detected. Dataset can be used for exploratory analysis, "
+            "clustering, anomaly detection, or visualization."
+        )
+
+    cardinality_error = check_target_cardinality(df, target_column)
+    if cardinality_error is not None:
+        return "invalid", cardinality_error
 
     series = df[target_column].dropna()
     total = len(series)
@@ -328,7 +415,13 @@ def _finalize_ranking(candidates: dict[str, int], reason_parts: dict[str, list[s
     return ranked_models
 
 
-def recommend_algorithms(file_path: str, profile: dict[str, Any]) -> dict[str, Any]:
+def recommend_algorithms(
+    file_path: str,
+    profile: dict[str, Any],
+    target_column: Optional[str],
+    target_reasoning: str,
+    identifier_columns: Optional[list[str]] = None,
+) -> dict[str, Any]:
     """Produce a heuristic ML algorithm recommendation for a (cleaned) dataset.
 
     No models are trained here -- see module docstring. This reasons purely
@@ -340,10 +433,27 @@ def recommend_algorithms(file_path: str, profile: dict[str, Any]) -> dict[str, A
             LangGraph node sequence in CLAUDE.md §5).
         profile: The JSON profile produced by profiler.profile_csv for this
             dataset (used for outlier/missing/skew signals).
+        target_column: The target column already identified by
+            `detect_target_column` on the ORIGINAL uploaded dataframe (see
+            `target_detection_node` in agents/graph.py). Deliberately NOT
+            re-derived here -- calling `detect_target_column` again against
+            this (cleaned/one-hot-encoded) file is exactly the Known Bugs
+            Issue 2 bug, where an encoded dummy column like
+            'Department_Marketing' could get picked as the target. Target
+            detection has exactly one call site in the whole pipeline.
+        target_reasoning: The reasoning string produced alongside
+            `target_column` by that same original-dataframe detection call.
+        identifier_columns: Columns detected as identifiers on the original
+            dataframe (see `detect_identifier_columns`). Surfaced in the
+            response as `excluded_columns` so the UI can explain why they were
+            left out of feature reasoning (Known Bugs, Issue 4). They have
+            already been dropped from the cleaned file by the cleaner, so this
+            is informational -- the signals below never see them.
 
     Returns:
-        A dict matching the shape in CLAUDE.md §9: problem_type,
-        target_column, detection_reasoning, ranked_models, top_recommendation.
+        A dict matching the shape in CLAUDE.md §9 plus `excluded_columns`:
+        problem_type, target_column, detection_reasoning, ranked_models,
+        top_recommendation, excluded_columns.
 
     Raises:
         MLRecommenderError: if the CSV cannot be loaded.
@@ -353,7 +463,6 @@ def recommend_algorithms(file_path: str, profile: dict[str, Any]) -> dict[str, A
     except ProfilerError as exc:
         raise MLRecommenderError(f"Cannot recommend algorithms for unreadable CSV: {exc}") from exc
 
-    target_column, target_reasoning = _detect_target_column(df)
     problem_type, type_reasoning = _detect_problem_type(df, target_column)
     detection_reasoning = f"{target_reasoning} {type_reasoning}".strip()
 
@@ -362,14 +471,20 @@ def recommend_algorithms(file_path: str, profile: dict[str, Any]) -> dict[str, A
         problem_type, target_column, detection_reasoning,
     )
 
-    signals = _dataset_signals(df, profile, target_column)
-
-    if problem_type == "classification":
-        ranked_models = _rank_classification_models(df, signals, target_column)
-    elif problem_type == "regression":
-        ranked_models = _rank_regression_models(signals)
+    if problem_type == "invalid":
+        # No dataset signals or candidate ranking make sense against a target
+        # that can't be learned from -- don't compute or return either.
+        ranked_models: list[dict[str, str]] = []
     else:
-        ranked_models = _rank_clustering_models(profile, signals)
+        signals = _dataset_signals(df, profile, target_column)
+        if problem_type == "classification":
+            ranked_models = _rank_classification_models(df, signals, target_column)
+        elif problem_type == "regression":
+            ranked_models = _rank_regression_models(signals)
+        else:
+            # "unknown" (no target detected): still surface clustering
+            # candidates as suggestions, per the reasoning text above.
+            ranked_models = _rank_clustering_models(profile, signals)
 
     top_recommendation = ranked_models[0]["name"] if ranked_models else None
 
@@ -379,4 +494,5 @@ def recommend_algorithms(file_path: str, profile: dict[str, Any]) -> dict[str, A
         "detection_reasoning": detection_reasoning,
         "ranked_models": ranked_models,
         "top_recommendation": top_recommendation,
+        "excluded_columns": list(identifier_columns or []),
     }
