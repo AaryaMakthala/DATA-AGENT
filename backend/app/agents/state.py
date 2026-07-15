@@ -16,6 +16,7 @@ class AnalystState(TypedDict, total=False):
     profile: dict[str, Any]
     target_column: Optional[str]
     target_reasoning: Optional[str]
+    possible_targets: Optional[list[dict[str, Any]]]
     identifier_columns: Optional[list[str]]
     data_validity: Optional[dict[str, Any]]
     cleaning_plan: Any

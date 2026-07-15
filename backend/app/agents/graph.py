@@ -76,7 +76,7 @@ def target_detection_node(state: AnalystState) -> dict:
     except ProfilerError as exc:
         logger.error("Graph: target detection node failed to load CSV: %s", exc)
         raise
-    target_column, target_reasoning = detect_target_column(df)
+    target_column, target_reasoning, possible_targets = detect_target_column(df)
     identifier_columns = detect_identifier_columns(df, target_column)
     logger.info("Graph: detected target_column=%s -- %s", target_column, target_reasoning)
     if identifier_columns:
@@ -84,6 +84,7 @@ def target_detection_node(state: AnalystState) -> dict:
     return {
         "target_column": target_column,
         "target_reasoning": target_reasoning,
+        "possible_targets": possible_targets,
         "identifier_columns": identifier_columns,
     }
 
@@ -215,6 +216,7 @@ def ml_recommendation_node(state: AnalystState) -> dict:
             state.get("target_column"),
             state.get("target_reasoning") or "",
             state.get("identifier_columns"),
+            state.get("possible_targets"),
         )
     except (ProfilerError, MLRecommenderError) as exc:
         logger.error("Graph: ML recommendation node failed: %s", exc)
