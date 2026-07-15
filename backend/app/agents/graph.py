@@ -1,11 +1,16 @@
 """LangGraph workflow (CLAUDE.md §5, extended per Known Bugs Issues 2 and 6a).
 
 Node sequence: START -> Profiler Node -> Target Detection Node -> Validation
-Node -(valid)-> LLM Analysis Node -> Cleaning Plan Node -> Python Cleaning
-Node -> Visualization Node -> ML Recommendation Node -> END. If Validation
-finds the dataset/target unusable, it routes straight to END instead --
-no LLM call, no cleaning, no charts are produced for data that can't be
-modeled (see `validation_node` / `_route_after_validation`).
+Node -(valid)-> LLM Node (analysis + cleaning plan, run concurrently) ->
+Python Cleaning Node -> Visualization Node -> ML Recommendation Node -> END.
+If Validation finds the dataset/target unusable, it routes straight to END
+instead -- no LLM call, no cleaning, no charts are produced for data that
+can't be modeled (see `validation_node` / `_route_after_validation`).
+
+The analysis and cleaning-plan LLM calls used to be two sequential nodes.
+They're independent -- each reads only the profile and writes a disjoint state
+key -- so they now run concurrently inside a single `llm_nodes` node, making
+their combined cost the slower call rather than the sum of both.
 
 Target detection runs on the ORIGINAL uploaded dataframe, before any
 cleaning or one-hot encoding, and its result is threaded through `state`
@@ -17,6 +22,7 @@ runs at all -- the FastAPI /upload endpoint saves the file and hands the graph
 a file_path to start from, so there's no separate no-op node for it here.
 """
 
+import concurrent.futures
 import json
 import re
 import uuid
@@ -37,7 +43,7 @@ from app.tools.ml_recommender import (
 from app.tools.profiler import ProfilerError, load_dataframe, profile_csv
 from app.tools.validator import validate_dataset
 from app.tools.visualizer import VisualizerError, generate_charts
-from app.utils.logger import get_logger
+from app.utils.logger import get_logger, log_duration
 
 logger = get_logger(__name__)
 
@@ -56,7 +62,8 @@ def profiler_node(state: AnalystState) -> dict:
     """Run the Python profiler on the uploaded CSV. No LLM involved."""
     logger.info("Graph: running profiler node for %s", state["file_path"])
     try:
-        profile = profile_csv(state["file_path"])
+        with log_duration(logger, "profiler_node"):
+            profile = profile_csv(state["file_path"])
     except ProfilerError as exc:
         logger.error("Graph: profiler node failed: %s", exc)
         raise
@@ -72,12 +79,14 @@ def target_detection_node(state: AnalystState) -> dict:
     """
     logger.info("Graph: running target detection node for %s", state["file_path"])
     try:
-        df = load_dataframe(state["file_path"])
+        with log_duration(logger, "target_detection_node.load_csv"):
+            df = load_dataframe(state["file_path"])
     except ProfilerError as exc:
         logger.error("Graph: target detection node failed to load CSV: %s", exc)
         raise
-    target_column, target_reasoning, possible_targets = detect_target_column(df)
-    identifier_columns = detect_identifier_columns(df, target_column)
+    with log_duration(logger, "target_detection_node.detect"):
+        target_column, target_reasoning, possible_targets = detect_target_column(df)
+        identifier_columns = detect_identifier_columns(df, target_column)
     logger.info("Graph: detected target_column=%s -- %s", target_column, target_reasoning)
     if identifier_columns:
         logger.info("Graph: detected identifier columns (excluded from charts/features): %s", identifier_columns)
@@ -115,35 +124,80 @@ def _route_after_validation(state: AnalystState) -> str:
     return "valid"
 
 
-def llm_analysis_node(state: AnalystState) -> dict:
-    """Ask the LLM to explain the profile in plain text (report + insights)."""
-    logger.info("Graph: running LLM analysis node")
-    prompt = build_analysis_prompt(state["profile"])
-    try:
-        report = _router.generate(prompt)
-    except LLMRouterError as exc:
-        logger.error("Graph: LLM analysis node failed: %s", exc)
-        raise
-    return {"report": report}
+def _run_analysis_llm(profile: dict) -> str:
+    """Worker: get the plain-text analysis/report from the LLM. Runs in a thread."""
+    prompt = build_analysis_prompt(profile)
+    with log_duration(logger, "llm_analysis.generate (LLM call)"):
+        return _router.generate(prompt)
 
 
-def cleaning_plan_node(state: AnalystState) -> dict:
-    """Ask the LLM for a structured cleaning plan Python will later execute."""
-    logger.info("Graph: running cleaning plan node")
-    prompt = build_cleaning_prompt(state["profile"])
-    try:
+def _run_cleaning_plan_llm(profile: dict) -> dict:
+    """Worker: get the structured cleaning plan from the LLM. Runs in a thread.
+
+    Parses the JSON here (inside the worker) so the JSON-decode work happens off
+    the main thread too, and falls back to storing the raw text if the model
+    didn't return valid JSON -- same behavior as the old sequential node.
+    """
+    prompt = build_cleaning_prompt(profile)
+    with log_duration(logger, "cleaning_plan.generate (LLM call)"):
         raw = _router.generate(prompt)
-    except LLMRouterError as exc:
-        logger.error("Graph: cleaning plan node failed: %s", exc)
-        raise
-
     try:
-        plan = json.loads(_extract_json_object(raw))
+        return json.loads(_extract_json_object(raw))
     except json.JSONDecodeError:
         logger.warning("Graph: cleaning plan response was not valid JSON; storing raw text instead")
-        plan = {"raw_plan": raw}
+        return {"raw_plan": raw}
 
-    return {"cleaning_plan": plan}
+
+def llm_nodes(state: AnalystState) -> dict:
+    """Run the two independent LLM calls (analysis + cleaning plan) concurrently.
+
+    These were two sequential graph nodes, but each reads only `state["profile"]`
+    and writes a disjoint key (`report` vs `cleaning_plan`), so there's no data
+    dependency between them -- running them back to back just paid for two round
+    trips in series. Here they run in parallel on a small ThreadPoolExecutor, so
+    the combined wall-clock cost is the slower of the two calls, not their sum.
+
+    Both worker functions delegate to the shared `_router`, whose own provider
+    pool has 2 workers -- exactly enough for these two concurrent calls to each
+    hold one provider slot without queueing.
+
+    If either call fails (LLMRouterError after the whole provider chain is
+    exhausted), the analysis aborts. Both futures are waited on first so that a
+    simultaneous failure of *both* calls logs each provider-chain error before
+    raising -- concurrent.futures never surfaces an unretrieved future's
+    exception on its own, so without this the cleaning-plan failure would be
+    invisible (CLAUDE.md §13: no silent failures). The analysis error is raised
+    first when both fail, matching the old sequential order.
+    """
+    logger.info("Graph: running LLM nodes (analysis + cleaning plan) in parallel")
+    profile = state["profile"]
+    with log_duration(logger, "llm_nodes parallel block (analysis + cleaning plan)"):
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="llm-node"
+        ) as pool:
+            analysis_future = pool.submit(_run_analysis_llm, profile)
+            cleaning_future = pool.submit(_run_cleaning_plan_llm, profile)
+
+            # Wait for both to finish so we can report *every* failure, not just
+            # the first -- otherwise a cleaning-plan error is swallowed when the
+            # analysis call also failed.
+            concurrent.futures.wait([analysis_future, cleaning_future])
+            analysis_exc = analysis_future.exception()
+            cleaning_exc = cleaning_future.exception()
+
+            if analysis_exc is not None:
+                logger.error("Graph: LLM analysis call failed: %s", analysis_exc)
+            if cleaning_exc is not None:
+                logger.error("Graph: LLM cleaning-plan call failed: %s", cleaning_exc)
+            if analysis_exc is not None:
+                raise analysis_exc
+            if cleaning_exc is not None:
+                raise cleaning_exc
+
+            report = analysis_future.result()
+            cleaning_plan = cleaning_future.result()
+
+    return {"report": report, "cleaning_plan": cleaning_plan}
 
 
 def python_cleaning_node(state: AnalystState) -> dict:
@@ -158,13 +212,14 @@ def python_cleaning_node(state: AnalystState) -> dict:
     logger.info("Graph: running Python cleaning node")
     file_id = state.get("file_id") or uuid.uuid4().hex
     try:
-        cleaned_file, applied_plan, viz_file = clean_csv(
-            state["file_path"],
-            state.get("cleaning_plan"),
-            file_id,
-            state.get("target_column"),
-            state.get("identifier_columns"),
-        )
+        with log_duration(logger, "python_cleaning_node"):
+            cleaned_file, applied_plan, viz_file = clean_csv(
+                state["file_path"],
+                state.get("cleaning_plan"),
+                file_id,
+                state.get("target_column"),
+                state.get("identifier_columns"),
+            )
     except CleanerError as exc:
         logger.error("Graph: Python cleaning node failed: %s", exc)
         raise
@@ -185,7 +240,8 @@ def visualization_node(state: AnalystState) -> dict:
     file_id = state.get("file_id") or uuid.uuid4().hex
     viz_source = state.get("viz_file") or state["cleaned_file"]
     try:
-        charts = generate_charts(viz_source, file_id)
+        with log_duration(logger, "visualization_node (chart generation)"):
+            charts = generate_charts(viz_source, file_id)
     except VisualizerError as exc:
         logger.error("Graph: visualization node failed: %s", exc)
         raise
@@ -209,15 +265,17 @@ def ml_recommendation_node(state: AnalystState) -> dict:
     """
     logger.info("Graph: running ML recommendation node")
     try:
-        cleaned_profile = profile_csv(state["cleaned_file"])
-        recommendations = recommend_algorithms(
-            state["cleaned_file"],
-            cleaned_profile,
-            state.get("target_column"),
-            state.get("target_reasoning") or "",
-            state.get("identifier_columns"),
-            state.get("possible_targets"),
-        )
+        with log_duration(logger, "ml_recommendation_node.reprofile"):
+            cleaned_profile = profile_csv(state["cleaned_file"])
+        with log_duration(logger, "ml_recommendation_node.recommend"):
+            recommendations = recommend_algorithms(
+                state["cleaned_file"],
+                cleaned_profile,
+                state.get("target_column"),
+                state.get("target_reasoning") or "",
+                state.get("identifier_columns"),
+                state.get("possible_targets"),
+            )
     except (ProfilerError, MLRecommenderError) as exc:
         logger.error("Graph: ML recommendation node failed: %s", exc)
         raise
@@ -231,8 +289,7 @@ def build_graph():
     graph.add_node("profiler", profiler_node)
     graph.add_node("target_detection", target_detection_node)
     graph.add_node("validation", validation_node)
-    graph.add_node("llm_analysis", llm_analysis_node)
-    graph.add_node("generate_cleaning_plan", cleaning_plan_node)
+    graph.add_node("llm_nodes", llm_nodes)
     graph.add_node("python_cleaning", python_cleaning_node)
     graph.add_node("visualization", visualization_node)
     graph.add_node("ml_recommendation", ml_recommendation_node)
@@ -243,10 +300,9 @@ def build_graph():
     graph.add_conditional_edges(
         "validation",
         _route_after_validation,
-        {"valid": "llm_analysis", "invalid": END},
+        {"valid": "llm_nodes", "invalid": END},
     )
-    graph.add_edge("llm_analysis", "generate_cleaning_plan")
-    graph.add_edge("generate_cleaning_plan", "python_cleaning")
+    graph.add_edge("llm_nodes", "python_cleaning")
     graph.add_edge("python_cleaning", "visualization")
     graph.add_edge("visualization", "ml_recommendation")
     graph.add_edge("ml_recommendation", END)

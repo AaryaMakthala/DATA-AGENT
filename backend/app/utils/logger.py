@@ -2,6 +2,9 @@
 
 import logging
 import sys
+import time
+from contextlib import contextmanager
+from typing import Iterator
 
 _LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -36,3 +39,29 @@ def get_logger(name: str) -> logging.Logger:
     """
     _configure_root_logger()
     return logging.getLogger(name)
+
+
+@contextmanager
+def log_duration(logger: logging.Logger, step: str) -> Iterator[None]:
+    """Time a block of work and log how long it took, in seconds.
+
+    Emits `TIMING | <step> took N.NNNs` at INFO on normal exit, so the
+    per-step cost of the upload/analysis flow is greppable in the logs
+    (`grep TIMING`). If the block raises, it still logs the elapsed time
+    with a `(failed)` marker before re-raising, so a slow step that also
+    errors isn't invisible.
+
+    Args:
+        logger: The logger to emit the timing line on.
+        step: Human-readable name of the step being timed.
+    """
+    start = time.perf_counter()
+    try:
+        yield
+    except Exception:
+        elapsed = time.perf_counter() - start
+        logger.info("TIMING | %s took %.3fs (failed)", step, elapsed)
+        raise
+    else:
+        elapsed = time.perf_counter() - start
+        logger.info("TIMING | %s took %.3fs", step, elapsed)

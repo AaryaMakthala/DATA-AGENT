@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from app.utils.logger import get_logger
+from app.utils.logger import get_logger, log_duration
 
 logger = get_logger(__name__)
 
@@ -232,7 +232,8 @@ def profile_csv(file_path: str) -> dict[str, Any]:
     path = Path(file_path)
     logger.info("Profiling CSV: %s", path.name)
 
-    df = load_dataframe(file_path)
+    with log_duration(logger, f"profile_csv.file_read [{path.name}]"):
+        df = load_dataframe(file_path)
 
     try:
         numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
@@ -241,6 +242,11 @@ def profile_csv(file_path: str) -> dict[str, Any]:
         missing_counts = df.isnull().sum()
         missing_values = {str(col): int(count) for col, count in missing_counts.items() if count > 0}
 
+        with log_duration(logger, f"profile_csv.outlier_detection [{path.name}]"):
+            outliers = _detect_outliers(df, numeric_cols)
+        with log_duration(logger, f"profile_csv.correlations [{path.name}]"):
+            correlations = _compute_correlations(df, numeric_cols)
+
         profile = {
             "shape": {"rows": int(df.shape[0]), "columns": int(df.shape[1])},
             "columns": {str(col): str(dtype) for col, dtype in df.dtypes.items()},
@@ -248,8 +254,8 @@ def profile_csv(file_path: str) -> dict[str, Any]:
             "duplicates": int(df.duplicated().sum()),
             "numeric_summary": _profile_numeric_columns(df, numeric_cols),
             "categorical_summary": _profile_categorical_columns(df, categorical_cols),
-            "outliers": _detect_outliers(df, numeric_cols),
-            "correlations": _compute_correlations(df, numeric_cols),
+            "outliers": outliers,
+            "correlations": correlations,
         }
     except (KeyError, ValueError) as exc:
         raise ProfilerError(f"Error computing profile statistics for {path.name}: {exc}") from exc
