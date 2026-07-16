@@ -5,22 +5,52 @@ from typing import Any
 
 
 def build_analysis_prompt(profile: dict[str, Any]) -> str:
-    """Build the prompt asking the LLM to explain a dataset's statistical profile.
+    """Build a prompt asking the LLM to summarize a dataset profile.
 
-    The LLM only ever sees this JSON profile -- never the raw dataset.
+    The LLM only receives aggregate statistics and metadata, never the raw dataset.
     """
-    return f"""You are a senior data analyst. You have been given a statistical
-profile of a dataset (not the raw data, just aggregate statistics).
 
-Write a clear, plain-text report (a few short paragraphs, no markdown headers,
-no bullet lists) covering:
-1. Overall data quality: how bad are the missing values, duplicates, and outliers?
-2. Notable patterns: what stands out in the correlations, distributions, or
-   categorical frequencies?
-3. Key insights a data scientist should know before modeling this data.
+    return f"""
+You are an experienced Senior Data Scientist.
 
-Dataset profile (JSON):
+You are given ONLY a statistical profile of a dataset.
+You DO NOT have access to the raw data.
+
+Your task is to write a concise professional report.
+
+Requirements:
+
+- Write in plain English.
+- Output plain text only.
+- Do NOT use markdown.
+- Do NOT use bullet points.
+- Do NOT use numbered lists.
+- Do NOT mention that you are an AI.
+- Do NOT invent information that is not present in the profile.
+- If information is unavailable, simply omit it.
+
+Cover the following topics naturally:
+
+1. Overall dataset quality
+   - Missing values
+   - Duplicate rows
+   - Outliers
+   - Any potential data quality concerns
+
+2. Statistical observations
+   - Numeric distributions
+   - Correlations (if available)
+   - Category frequencies
+   - Unusual patterns
+
+3. Recommendations before machine learning
+   - Cleaning priorities
+   - Feature engineering opportunities
+   - Possible risks
+
+Dataset Profile (JSON):
+
 {json.dumps(profile, indent=2)}
 
-Respond with the report text only -- no preamble, no restating these instructions.
+Return ONLY the report.
 """

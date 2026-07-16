@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app.api.errors import APIError, api_error_handler
 from app.api.routes import router
 from app.services.file_service import purge_expired_artifacts
 from app.utils.config import Config
@@ -12,6 +13,11 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 app = FastAPI(title="AI Data Analyst Agent", version="0.1.0")
+
+# Typed error envelope: any APIError raised in a route serializes to
+# {"success": false, "error": {"type", "message"}, "detail": "..."} instead of
+# a bare 500 (robustness spec, section 7).
+app.add_exception_handler(APIError, api_error_handler)
 
 
 @app.on_event("startup")

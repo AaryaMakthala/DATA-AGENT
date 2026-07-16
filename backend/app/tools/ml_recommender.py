@@ -731,6 +731,54 @@ def _rank_clustering_models(profile: dict[str, Any], signals: dict[str, Any]) ->
     ]
 
 
+# Minimum dataset size for a recommendation to be treated as reliable rather
+# than illustrative. These don't block the recommendation (the heuristics still
+# run) -- they attach a caution so the UI can temper expectations.
+_MIN_RELIABLE_ROWS = 50
+_MIN_RELIABLE_FEATURES = 2
+# Rows-per-class floor below which a classifier can't be learned meaningfully.
+_MIN_ROWS_PER_CLASS = 10
+
+
+def _readiness_warnings(
+    df: pd.DataFrame,
+    signals: dict[str, Any],
+    problem_type: str,
+    target_column: Optional[str],
+) -> list[str]:
+    """Attach cautions when the dataset is too small/thin to model reliably.
+
+    These are non-blocking (the heuristic ranking still runs, per CLAUDE.md §9
+    -- nothing is trained here): they just tell the user the recommendation
+    rests on very little data. Checks minimum rows, minimum feature count, and
+    -- for classification -- minimum rows-per-class.
+    """
+    warnings: list[str] = []
+    n_rows = signals.get("n_rows", len(df))
+    n_features = signals.get("n_numeric", 0) + signals.get("n_categorical", 0)
+
+    if n_rows < _MIN_RELIABLE_ROWS:
+        warnings.append(
+            f"Only {n_rows} rows: this is below the ~{_MIN_RELIABLE_ROWS}-row floor for a reliable "
+            "model, so treat the recommendation as indicative rather than definitive."
+        )
+    if n_features < _MIN_RELIABLE_FEATURES:
+        warnings.append(
+            f"Only {n_features} usable feature column(s): with so few predictors, model choice "
+            "matters less than gathering more informative features."
+        )
+
+    if problem_type == "classification" and target_column and target_column in df.columns:
+        class_counts = df[target_column].dropna().value_counts()
+        if not class_counts.empty and class_counts.min() < _MIN_ROWS_PER_CLASS:
+            smallest = int(class_counts.min())
+            warnings.append(
+                f"The smallest class has only {smallest} row(s) (< {_MIN_ROWS_PER_CLASS}); a classifier "
+                "cannot learn it reliably. Consider collecting more examples or merging rare classes."
+            )
+    return warnings
+
+
 def recommend_algorithms(
     file_path: str,
     profile: dict[str, Any],
@@ -802,6 +850,8 @@ def recommend_algorithms(
             # "unknown" (no target detected): still surface clustering
             # candidates as suggestions.
             ranked_models = _rank_clustering_models(profile, signals)
+
+        warnings.extend(_readiness_warnings(df, signals, problem_type, target_column))
 
     top_recommendation = ranked_models[0]["name"] if ranked_models else None
 

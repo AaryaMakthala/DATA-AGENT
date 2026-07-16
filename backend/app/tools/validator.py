@@ -25,6 +25,9 @@ logger = get_logger(__name__)
 # illustrative-only rather than blocked outright.
 _MIN_ROWS_WARNING = 5
 
+# Warn (not block) when this share of rows or more are exact duplicates.
+_HIGH_DUPLICATE_WARNING_PCT = 20.0
+
 
 def validate_dataset(
     df: pd.DataFrame,
@@ -48,12 +51,18 @@ def validate_dataset(
             profiling/visualization.
 
     Returns:
-        {"valid": bool, "errors": list[str], "warnings": list[str]}.
-        `valid` is False only when `errors` is non-empty -- warnings never
-        block analysis.
+        {"valid": bool, "errors": list[str], "warnings": list[str],
+         "duplicate_percentage": float}. `valid` is False only when `errors`
+        is non-empty -- warnings never block analysis. `duplicate_percentage`
+        is the share of rows that are exact duplicates (0-100), surfaced as a
+        metric even when it's below the blocking threshold.
     """
     errors: list[str] = []
     warnings: list[str] = []
+
+    n_rows = df.shape[0]
+    duplicate_count = int(df.duplicated().sum()) if n_rows > 0 else 0
+    duplicate_percentage = round(duplicate_count / n_rows * 100, 2) if n_rows > 0 else 0.0
 
     if df.shape[0] == 0:
         errors.append("The uploaded file has no data rows.")
@@ -62,6 +71,12 @@ def validate_dataset(
     if df.shape[0] > 0 and df.drop_duplicates().shape[0] < 2:
         errors.append(
             "After removing duplicate rows, fewer than 2 unique rows remain -- not enough data to analyze."
+        )
+
+    if duplicate_percentage >= _HIGH_DUPLICATE_WARNING_PCT:
+        warnings.append(
+            f"{duplicate_percentage:.1f}% of rows ({duplicate_count}) are exact duplicates; "
+            "they will be removed during cleaning."
         )
 
     if target_column is not None and target_column in df.columns:
@@ -90,6 +105,23 @@ def validate_dataset(
             "treat results as illustrative only."
         )
 
+    # A dataset with no detectable target isn't invalid -- it's still useful for
+    # exploratory/clustering analysis -- but the user should know supervised
+    # modeling won't happen.
+    if target_column is None and feature_columns:
+        warnings.append(
+            "No clear target column was detected. The dataset will be analyzed for exploratory "
+            "insights and clustering rather than supervised prediction."
+        )
+
     valid = len(errors) == 0
-    logger.info("Validator: dataset valid=%s errors=%s warnings=%s", valid, errors, warnings)
-    return {"valid": valid, "errors": errors, "warnings": warnings}
+    logger.info(
+        "Validator: dataset valid=%s duplicate_pct=%.1f errors=%s warnings=%s",
+        valid, duplicate_percentage, errors, warnings,
+    )
+    return {
+        "valid": valid,
+        "errors": errors,
+        "warnings": warnings,
+        "duplicate_percentage": duplicate_percentage,
+    }

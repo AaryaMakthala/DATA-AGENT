@@ -48,6 +48,20 @@ class Config:
     # is rejected. Default 100 MB; override with MAX_UPLOAD_MB.
     MAX_UPLOAD_BYTES: int = int(os.getenv("MAX_UPLOAD_MB", "100")) * 1024 * 1024
 
+    # Hard upper bounds the profiler enforces on a parsed DataFrame. Even a
+    # modest-on-disk CSV can expand into a frame too large to profile (the
+    # correlation matrix alone is O(cols^2) and pandas holds the whole thing in
+    # memory). Past these limits we fail with a clear message instead of letting
+    # the process OOM-kill mid-analysis. Override with MAX_DATASET_ROWS /
+    # MAX_DATASET_COLUMNS. 0 disables a given check.
+    MAX_DATASET_ROWS: int = int(os.getenv("MAX_DATASET_ROWS", "2000000"))
+    MAX_DATASET_COLUMNS: int = int(os.getenv("MAX_DATASET_COLUMNS", "1000"))
+
+    # Correlation is only computed over at most this many numeric columns (the
+    # highest-variance ones); beyond it the O(cols^2) matrix is both slow to
+    # compute and useless to show. Override with MAX_CORRELATION_COLUMNS.
+    MAX_CORRELATION_COLUMNS: int = int(os.getenv("MAX_CORRELATION_COLUMNS", "50"))
+
     # How long generated artifacts (uploads, cleaned CSVs, chart PNGs, reports)
     # are kept before a startup sweep deletes them. Without this the folders
     # grow without bound -- every analysis leaves an upload, a cleaned file, a

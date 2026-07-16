@@ -58,19 +58,51 @@ export async function analyzeCsv(fileId: string): Promise<AnalyzeResponse> {
   }
 }
 
-export async function getResults(fileId: string): Promise<ResultsResponse> {
+export async function getResults(
+  fileId: string,
+  signal?: AbortSignal
+): Promise<ResultsResponse> {
   try {
-    const response = await client.get<ResultsResponse>(`/results/${fileId}`);
+    const response = await client.get<ResultsResponse>(`/results/${fileId}`, {
+      signal,
+    });
     return response.data;
   } catch (error) {
+    // Let callers treat intentional aborts as non-errors.
+    if (isAxiosError(error) && error.code === "ERR_CANCELED") {
+      throw error;
+    }
     throw toApiError(error, "Failed to load analysis results.");
   }
 }
 
-/** Resolve a backend-relative path (e.g. "/charts/x.png") to an absolute URL. */
+/**
+ * Resolve a backend-relative path (e.g. "/charts/x.png") to an absolute URL.
+ * Rejects dangerous URL schemes. Absolute http(s) URLs are accepted only when
+ * they match the configured API origin.
+ */
 export function resolveAssetUrl(path: string): string {
-  if (path.startsWith("http://") || path.startsWith("https://")) {
-    return path;
+  const trimmed = path.trim();
+  const lower = trimmed.toLowerCase();
+  if (
+    lower.startsWith("javascript:") ||
+    lower.startsWith("data:") ||
+    lower.startsWith("vbscript:")
+  ) {
+    return `${BASE_URL}/`;
   }
-  return `${BASE_URL}${path}`;
+
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    try {
+      const url = new URL(trimmed);
+      const base = new URL(BASE_URL);
+      if (url.origin === base.origin) return url.toString();
+    } catch {
+      // invalid absolute URL
+    }
+    return `${BASE_URL}/`;
+  }
+
+  const normalized = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return `${BASE_URL}${normalized}`;
 }

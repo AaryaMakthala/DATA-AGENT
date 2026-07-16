@@ -20,6 +20,19 @@ cleaned/encoded dataframe.
 The "Upload CSV" step from the spec's node sequence happens before the graph
 runs at all -- the FastAPI /upload endpoint saves the file and hands the graph
 a file_path to start from, so there's no separate no-op node for it here.
+
+`file_id` handling: `profiler_node` (the first node in the graph) generates
+a `file_id` if the caller didn't already put one in the initial state, and
+returns it into `state`. Every downstream node that needs a file_id
+(`python_cleaning_node`, `visualization_node`) reads `state["file_id"]`
+directly instead of generating its own fallback UUID. Previously each of
+those two nodes independently did `state.get("file_id") or uuid.uuid4().hex`,
+which meant that whenever `file_id` wasn't pre-seeded, they generated *two
+different* random IDs -- cleaned files/viz snapshots got tagged with one UUID
+and charts with another, silently breaking the file_id contract the frontend
+relies on to associate outputs from the same run. Generating it once, in the
+first node, and threading it through state like every other derived field,
+removes that class of bug entirely.
 """
 
 import concurrent.futures
@@ -34,6 +47,7 @@ from app.agents.state import AnalystState
 from app.prompts.analysis_prompt import build_analysis_prompt
 from app.prompts.cleaning_prompt import build_cleaning_prompt
 from app.tools.cleaner import CleanerError, clean_csv
+from app.tools.data_quality import compute_quality_score
 from app.tools.ml_recommender import (
     MLRecommenderError,
     detect_identifier_columns,
@@ -49,7 +63,10 @@ logger = get_logger(__name__)
 
 _router = LLMRouter()
 
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
+# Non-greedy so a stray extra ```...``` fenced block earlier in the LLM's
+# response (e.g. an example shown before the real answer) can't get pulled
+# into the match along with the real JSON object.
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 
 def _extract_json_object(text: str) -> str:
@@ -59,15 +76,22 @@ def _extract_json_object(text: str) -> str:
 
 
 def profiler_node(state: AnalystState) -> dict:
-    """Run the Python profiler on the uploaded CSV. No LLM involved."""
+    """Run the Python profiler on the uploaded CSV. No LLM involved.
+
+    Also the single source of truth for `file_id`: if the caller (the
+    FastAPI /upload endpoint) already put one in the initial state, it's
+    reused; otherwise one is generated here, once, and threaded through
+    state for every downstream node that needs to name an output file.
+    """
     logger.info("Graph: running profiler node for %s", state["file_path"])
+    file_id = state.get("file_id") or uuid.uuid4().hex
     try:
         with log_duration(logger, "profiler_node"):
             profile = profile_csv(state["file_path"])
     except ProfilerError as exc:
         logger.error("Graph: profiler node failed: %s", exc)
         raise
-    return {"profile": profile}
+    return {"profile": profile, "file_id": file_id}
 
 
 def target_detection_node(state: AnalystState) -> dict:
@@ -162,8 +186,10 @@ def llm_nodes(state: AnalystState) -> dict:
     the combined wall-clock cost is the slower of the two calls, not their sum.
 
     Both worker functions delegate to the shared `_router`, whose own provider
-    pool has 2 workers -- exactly enough for these two concurrent calls to each
-    hold one provider slot without queueing.
+    pool is sized to handle these two concurrent calls -- see llm_router.py's
+    module docstring for why that pool needs more than 2 workers now that calls
+    can be both concurrent (this node) *and* sequential-with-fallback (each
+    individual `generate()` call trying up to 3 providers).
 
     If either call fails (LLMRouterError after the whole provider chain is
     exhausted), the analysis aborts. Both futures are waited on first so that a
@@ -212,9 +238,13 @@ def python_cleaning_node(state: AnalystState) -> dict:
     not applied) so downstream consumers -- the API response and the
     frontend's "Cleaning Plan Applied" report -- reflect what actually
     happened to the data, not the LLM's original raw proposal.
+
+    Uses `state["file_id"]` (set once by `profiler_node`) to name output
+    files rather than generating its own fallback UUID -- see module
+    docstring for why generating separate UUIDs per node was a bug.
     """
     logger.info("Graph: running Python cleaning node")
-    file_id = state.get("file_id") or uuid.uuid4().hex
+    file_id = state["file_id"]
     try:
         with log_duration(logger, "python_cleaning_node"):
             cleaned_file, applied_plan, viz_file = clean_csv(
@@ -239,9 +269,13 @@ def visualization_node(state: AnalystState) -> dict:
     meaningless dummy-vs-dummy scatter plots between one-hot columns (Known
     Bugs, Issue 3). Identifier columns were already dropped by the cleaner, so
     no ID histograms/scatters are produced either (Issue 4).
+
+    Uses `state["file_id"]` (set once by `profiler_node`) so chart filenames
+    share the same ID as the cleaned/viz files from `python_cleaning_node`
+    instead of a separately-generated fallback UUID.
     """
     logger.info("Graph: running visualization node")
-    file_id = state.get("file_id") or uuid.uuid4().hex
+    file_id = state["file_id"]
     viz_source = state.get("viz_file") or state["cleaned_file"]
     try:
         with log_duration(logger, "visualization_node (chart generation)"):
@@ -283,7 +317,17 @@ def ml_recommendation_node(state: AnalystState) -> dict:
     except (ProfilerError, MLRecommenderError) as exc:
         logger.error("Graph: ML recommendation node failed: %s", exc)
         raise
-    return {"recommendations": recommendations}
+
+    # Data quality score is computed from the cleaned profile plus the detected
+    # target/problem type -- deterministic Python, no LLM (see data_quality.py).
+    with log_duration(logger, "ml_recommendation_node.quality_score"):
+        quality = compute_quality_score(
+            cleaned_profile,
+            state.get("target_column"),
+            recommendations.get("problem_type"),
+            state.get("identifier_columns"),
+        )
+    return {"recommendations": recommendations, "quality_score": quality}
 
 
 def build_graph():

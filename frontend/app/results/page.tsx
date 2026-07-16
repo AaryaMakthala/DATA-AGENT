@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { z } from "zod";
 
 import { SiteNav } from "@/components/SiteNav";
 import { ApiError, getResults, resolveAssetUrl } from "@/lib/api";
-import type { ResultsResponse } from "@/types/analysis";
 
 /**
  * Results page. Two modes:
@@ -33,8 +33,13 @@ interface CardVM {
 }
 
 interface ChartVM {
+  /** Stable React key (path for real charts, id for mock). */
+  key: string;
   title: string;
-  node: React.ReactNode;
+  /** Mock mode: inline SVG. Real mode: omit and use `url`. */
+  node?: React.ReactNode;
+  /** Real mode: validated absolute URL for a backend chart PNG. */
+  url?: string;
 }
 
 interface ResultsVM {
@@ -42,6 +47,11 @@ interface ResultsVM {
   filename: string;
   rows: string;
   cols: string;
+  /** Set only when the backend rejected this dataset (data_validity.valid ===
+   * false, or recommendations.problem_type === "invalid"). When present, the
+   * page renders ONLY this message + a "Try a different file" action, and no
+   * Best Model / Comparison / Visual Insights UI is rendered at all. */
+  invalidMessage?: string;
   best: {
     recommendedLabel: string;
     name: string;
@@ -57,7 +67,89 @@ interface ResultsVM {
   models: CardVM[];
   charts: ChartVM[];
   downloadHref?: string;
+  /** Deterministic data-quality score (0-100) + issues, when the backend
+   * computed one. Rendered as a compact card above the best-model section. */
+  quality?: { score: number; issues: string[] };
 }
+
+// --------------------------- Zod response validation -------------------------
+
+const resultsResponseSchema = z
+  .object({
+    file_id: z.string().min(1),
+    profile: z
+      .object({
+        shape: z.object({
+          rows: z.number(),
+          columns: z.number(),
+        }),
+        numeric_summary: z
+          .record(
+            z.object({
+              mean: z.number().nullish(),
+              median: z.number().nullish(),
+              std: z.number().nullish(),
+              min: z.number().nullish(),
+              max: z.number().nullish(),
+            })
+          )
+          .nullish(),
+        categorical_summary: z.record(z.unknown()).nullish(),
+        missing_values: z.record(z.number()).nullish(),
+        duplicates: z.number().nullish(),
+        outliers: z
+          .record(z.object({ count: z.number() }).passthrough())
+          .nullish(),
+        correlations: z.record(z.record(z.number())).nullish(),
+      })
+      .passthrough()
+      .nullish(),
+    report: z.string().nullish(),
+    data_validity: z
+      .object({
+        valid: z.boolean(),
+        errors: z.array(z.string()).nullish().transform((v) => v ?? []),
+      })
+      .passthrough()
+      .nullish(),
+    quality_score: z
+      .object({
+        quality_score: z.number(),
+        issues: z.array(z.string()).nullish().transform((v) => v ?? []),
+      })
+      .passthrough()
+      .nullish(),
+    recommendations: z
+      .object({
+        problem_type: z.string().nullish(),
+        target_column: z.string().nullish(),
+        detection_reasoning: z
+          .string()
+          .nullish()
+          .transform((v) => v ?? ""),
+        ranked_models: z
+          .array(
+            z.object({
+              name: z.string(),
+              confidence: z.string().nullish(),
+              reason: z.string().nullish().transform((v) => v ?? ""),
+            })
+          )
+          .nullish()
+          .transform((v) => v ?? []),
+        top_recommendation: z.string().nullish(),
+      })
+      .passthrough()
+      .nullish(),
+    charts: z
+      .array(z.string())
+      .nullish()
+      .transform((v) => v ?? []),
+    cleaned_file: z.string().nullish(),
+  })
+  .passthrough();
+
+type ValidatedResults = z.infer<typeof resultsResponseSchema>;
 
 // ------------------------------- mock charts --------------------------------
 
@@ -207,12 +299,12 @@ const MOCK_VM: ResultsVM = {
     { name: "SVR", value: "68%", tag: "Average", isBest: false },
   ],
   charts: [
-    { title: "Target Distribution", node: <DonutChart /> },
-    { title: "Feature Importance", node: <FeatureImportanceChart /> },
-    { title: "Actual vs Predicted", node: <ScatterChart /> },
-    { title: "Residuals Distribution", node: <ResidualsChart /> },
-    { title: "Correlation Heatmap", node: <HeatmapChart /> },
-    { title: "Prediction Error", node: <BoxPlotChart /> },
+    { key: "mock-donut", title: "Target Distribution", node: <DonutChart /> },
+    { key: "mock-fi", title: "Feature Importance", node: <FeatureImportanceChart /> },
+    { key: "mock-scatter", title: "Actual vs Predicted", node: <ScatterChart /> },
+    { key: "mock-resid", title: "Residuals Distribution", node: <ResidualsChart /> },
+    { key: "mock-heat", title: "Correlation Heatmap", node: <HeatmapChart /> },
+    { key: "mock-box", title: "Prediction Error", node: <BoxPlotChart /> },
   ],
 };
 
@@ -222,6 +314,64 @@ function formatNumber(n: number): string {
   return n.toLocaleString("en-US");
 }
 
+/** Placeholder `best` block for invalid datasets. Never rendered -- the
+ * invalidMessage branch in ResultsView returns before touching `best` -- but
+ * the ResultsVM type requires the field to be present. */
+const EMPTY_BEST: ResultsVM["best"] = {
+  recommendedLabel: "",
+  name: "",
+  badge: "",
+  description: "",
+  scoreLabel: "",
+  scoreValue: "",
+  scoreCaption: "",
+  gaugeFill: 0,
+  scaleLeft: "",
+  scaleRight: "",
+};
+
+const ALLOWED_ASSET_PREFIXES = ["/charts/", "/download/"] as const;
+
+/** Resolve backend asset paths only when they are known safe chart/download URLs. */
+function safeResolveAssetUrl(path: string): string | undefined {
+  const trimmed = path.trim();
+  if (!trimmed) return undefined;
+
+  const lower = trimmed.toLowerCase();
+  if (
+    lower.startsWith("javascript:") ||
+    lower.startsWith("data:") ||
+    lower.startsWith("vbscript:") ||
+    lower.startsWith("blob:")
+  ) {
+    return undefined;
+  }
+
+  const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    try {
+      const url = new URL(trimmed);
+      const base = new URL(apiBase);
+      if (url.origin !== base.origin) return undefined;
+      if (url.pathname.includes("..")) return undefined;
+      if (!ALLOWED_ASSET_PREFIXES.some((p) => url.pathname.startsWith(p))) {
+        return undefined;
+      }
+      return url.toString();
+    } catch {
+      return undefined;
+    }
+  }
+
+  const normalized = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  if (normalized.includes("..") || normalized.includes("\\")) return undefined;
+  if (!ALLOWED_ASSET_PREFIXES.some((p) => normalized.startsWith(p))) {
+    return undefined;
+  }
+  return resolveAssetUrl(normalized);
+}
+
 /** Turn a generated chart filename into a human-readable title.
  * File IDs are hex (no underscores), so splitting on "_" is safe:
  *   {id}_bar_Department.png      -> "Department Distribution"
@@ -229,7 +379,7 @@ function formatNumber(n: number): string {
  *   {id}_scatter_Age_Salary.png  -> "Age vs Salary"
  *   {id}_correlation_heatmap.png -> "Correlation Heatmap" */
 function chartTitle(path: string): string {
-  const file = path.split("/").pop()?.replace(/\.png$/, "") ?? path;
+  const file = path.split("/").pop()?.replace(/\.png$/i, "") ?? path;
   const parts = file.split("_");
   const kind = parts[1];
   const rest = parts.slice(2);
@@ -241,7 +391,7 @@ function chartTitle(path: string): string {
 
 /** Map a coarse confidence label to a gauge fill fraction (visual only —
  * this is NOT a performance metric). */
-function confidenceToFill(label?: string): number {
+function confidenceToFill(label?: string | null): number {
   switch ((label ?? "").trim().toLowerCase()) {
     case "high":
       return 0.9;
@@ -258,17 +408,55 @@ function confidenceToFill(label?: string): number {
   }
 }
 
-function buildRealVM(data: ResultsResponse): ResultsVM {
+function buildRealVM(data: ValidatedResults): ResultsVM {
   const rec = data.recommendations;
   const rows = data.profile?.shape.rows ?? 0;
   const cols = data.profile?.shape.columns ?? 0;
+
+  // Failure gate (Bug 1 + Bug 4): if the backend flagged this dataset as
+  // unusable, surface the real validation error and render NOTHING else --
+  // no best-model card, no comparison grid, no gauge, no charts. The backend
+  // routes validation -> END for these, so recommendations/charts/cleaned_file
+  // arrive as null; rendering the normal VM would produce the broken
+  // "No recommendation / Model Confidence —" UI.
+  const validity = data.data_validity;
+  const invalidByGate = validity != null && validity.valid === false;
+  const invalidByRec = rec?.problem_type === "invalid";
+  if (invalidByGate || invalidByRec) {
+    const message =
+      validity?.errors?.[0] ??
+      rec?.detection_reasoning ??
+      "This dataset can't be analyzed. It doesn't contain data a predictive model can learn from.";
+    return {
+      isReal: true,
+      filename: `${data.file_id}.csv`,
+      rows: formatNumber(rows),
+      cols: String(cols),
+      invalidMessage: message,
+      best: EMPTY_BEST,
+      models: [],
+      charts: [],
+    };
+  }
+
   const ranked = rec?.ranked_models ?? [];
   const top = ranked[0];
   const topFill = confidenceToFill(top?.confidence);
 
   const problem = rec?.problem_type ?? "unknown";
-  const target = rec?.target_column;
+  const target = rec?.target_column ?? undefined;
   const caption = target ? `${problem} · target: ${target}` : problem;
+
+  const charts: ChartVM[] = [];
+  for (const path of data.charts ?? []) {
+    const url = safeResolveAssetUrl(path);
+    if (!url) continue;
+    charts.push({
+      key: path,
+      title: chartTitle(path),
+      url,
+    });
+  }
 
   return {
     isReal: true,
@@ -279,7 +467,7 @@ function buildRealVM(data: ResultsResponse): ResultsVM {
       recommendedLabel: "Recommended Model",
       name: rec?.top_recommendation ?? "No recommendation",
       badge: "Best Fit",
-      description: rec?.detection_reasoning ?? "No detection reasoning available.",
+      description: rec?.detection_reasoning || "No detection reasoning available.",
       scoreLabel: "Model Confidence",
       scoreValue: top?.confidence ?? "—",
       scoreCaption: caption,
@@ -292,20 +480,15 @@ function buildRealVM(data: ResultsResponse): ResultsVM {
       value: m.confidence ?? "—",
       tag: i === 0 ? "Best Fit" : undefined,
       isBest: i === 0,
-      reason: m.reason,
+      reason: m.reason || undefined,
     })),
-    charts: (data.charts ?? []).map((path) => ({
-      title: chartTitle(path),
-      node: (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={resolveAssetUrl(path)}
-          alt={chartTitle(path)}
-          className="w-full rounded-[10px] border border-line"
-        />
-      ),
-    })),
-    downloadHref: data.cleaned_file ? resolveAssetUrl(data.cleaned_file) : undefined,
+    charts,
+    downloadHref: data.cleaned_file
+      ? safeResolveAssetUrl(data.cleaned_file)
+      : undefined,
+    quality: data.quality_score
+      ? { score: data.quality_score.quality_score, issues: data.quality_score.issues ?? [] }
+      : undefined,
   };
 }
 
@@ -319,9 +502,69 @@ function gaugePath(fill: number): string {
   return `M12 82 A63 63 0 0 1 ${x.toFixed(1)} ${y.toFixed(1)}`;
 }
 
+// --------------------------- chart image (real) -----------------------------
+
+function ChartImage({ title, url }: { title: string; url: string }) {
+  const [hasError, setHasError] = useState(false);
+
+  if (hasError) {
+    return (
+      <div
+        className="flex h-48 w-full flex-col items-center justify-center text-center"
+        role="img"
+        aria-label={`${title}: chart unavailable`}
+      >
+        <p className="text-xs text-muted">Chart unavailable</p>
+      </div>
+    );
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={url}
+      alt={title}
+      className="w-full rounded-[10px] border border-line"
+      loading="lazy"
+      onError={() => setHasError(true)}
+    />
+  );
+}
+
 // --------------------------- presentational view ----------------------------
 
 function ResultsView({ vm }: { vm: ResultsVM }) {
+  // Invalid-dataset state (Bug 1 + Bug 4): render ONLY the failure message and
+  // a "Try a different file" action. None of the Best Model / Comparison /
+  // Visual Insights / download markup below is reached in this state.
+  if (vm.invalidMessage) {
+    return (
+      <div
+        className="mb-16 mt-6 rounded-[16px] border px-6 py-12 text-center"
+        style={{ borderColor: "#e6cfc8", backgroundColor: "#f8eeeb" }}
+        role="alert"
+      >
+        <span
+          className="mx-auto flex h-12 w-12 items-center justify-center rounded-full"
+          style={{ background: "#c05a44" }}
+          aria-hidden="true"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <line x1="12" y1="8" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+            <circle cx="12" cy="12" r="9" />
+          </svg>
+        </span>
+        <h1 className="display-heading mt-6 text-3xl sm:text-4xl">This dataset can&apos;t be analyzed</h1>
+        <p className="mx-auto mt-4 max-w-xl text-sm text-muted">{vm.invalidMessage}</p>
+        <p className="mt-2 text-xs text-muted">File: {vm.filename}</p>
+        <Link href="/upload" className="btn btn-yellow mt-8 inline-flex">Try a different file</Link>
+      </div>
+    );
+  }
+
+  const showConfidenceArrow = vm.best.scoreValue !== "—";
+
   return (
     <>
       {/* Success banner */}
@@ -330,7 +573,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
         style={{ borderColor: "#cfe3c8", backgroundColor: "#eef6e9" }}
       >
         <div className="flex items-center gap-4">
-          <span className="flex h-10 w-10 items-center justify-center rounded-full" style={{ background: "#3f9d54" }}>
+          <span className="flex h-10 w-10 items-center justify-center rounded-full" style={{ background: "#3f9d54" }} aria-hidden="true">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <polyline points="5 12 10 17 19 7" />
             </svg>
@@ -342,6 +585,37 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
         </div>
         <div className="label-mono text-[10px]">{vm.rows} rows · {vm.cols} columns</div>
       </div>
+
+      {/* Data quality score */}
+      {vm.quality && (
+        <div className="card-elevated mt-6 flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:gap-8">
+          <div className="flex items-center gap-4">
+            <div
+              className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full text-xl font-bold text-white"
+              style={{
+                background:
+                  vm.quality.score >= 80 ? "#3f9d54" : vm.quality.score >= 60 ? "#f4c542" : "#c05a44",
+              }}
+              aria-label={`Data quality score ${vm.quality.score}`}
+            >
+              {vm.quality.score}
+            </div>
+            <div>
+              <div className="label-mono text-[10px]">Data Quality Score</div>
+              <div className="font-display text-lg font-bold text-ink">
+                {vm.quality.score >= 80 ? "Good" : vm.quality.score >= 60 ? "Fair" : "Needs attention"}
+              </div>
+            </div>
+          </div>
+          {vm.quality.issues.length > 0 && (
+            <ul className="flex flex-1 flex-col gap-1">
+              {vm.quality.issues.map((issue, i) => (
+                <li key={i} className="text-xs text-muted">• {issue}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Best model heading */}
       <h1 className="display-heading mt-10 text-4xl sm:text-5xl">
@@ -365,16 +639,22 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
             <div className="label-mono text-[10px]">{vm.best.scoreLabel}</div>
             <div className="mt-2 flex items-center gap-2">
               <span className="font-display text-4xl font-bold text-ink">{vm.best.scoreValue}</span>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3f9d54" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <line x1="12" y1="19" x2="12" y2="6" />
-                <polyline points="6 12 12 6 18 12" />
-              </svg>
+              {showConfidenceArrow && (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3f9d54" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <line x1="12" y1="19" x2="12" y2="6" />
+                  <polyline points="6 12 12 6 18 12" />
+                </svg>
+              )}
             </div>
             <p className="mt-2 text-xs text-muted">{vm.best.scoreCaption}</p>
           </div>
 
           {/* Gauge */}
-          <div className="relative">
+          <div
+            className="relative"
+            role="img"
+            aria-label={`${vm.best.scoreLabel}: ${vm.best.scoreValue}`}
+          >
             <svg width="150" height="90" viewBox="0 0 150 90" aria-hidden="true">
               <path d="M12 82 A63 63 0 0 1 138 82" fill="none" stroke="#efe9dd" strokeWidth="16" strokeLinecap="round" />
               <path d={gaugePath(vm.best.gaugeFill)} fill="none" stroke="#f4c542" strokeWidth="16" strokeLinecap="round" />
@@ -420,17 +700,30 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       <h2 className="mt-12 font-display text-lg font-bold text-ink">Visual Insights</h2>
       <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
         {vm.charts.map((chart) => (
-          <div key={chart.title} className="card !p-5">
+          <div key={chart.key} className="card !p-5">
             <div className="mb-4 text-center text-xs font-bold text-ink">{chart.title}</div>
-            <div className="flex items-center justify-center">{chart.node}</div>
+            <div className="flex items-center justify-center">
+              {chart.url ? (
+                <ChartImage title={chart.title} url={chart.url} />
+              ) : (
+                chart.node
+              )}
+            </div>
           </div>
         ))}
       </div>
 
+      {/* Stopgap disclaimer until full Terms/Privacy exist. AI-generated model
+          suggestions are heuristic (no model is trained -- CLAUDE.md §9), so
+          they must not be read as professional advice. */}
+      <p className="mt-8 text-center text-xs text-muted">
+        AI-generated recommendations — not professional advice; verify before use.
+      </p>
+
       {/* Download panel */}
       <div className="mb-16 mt-10 flex flex-col items-start justify-between gap-4 rounded-[16px] border border-line bg-cream-card px-8 py-7 sm:flex-row sm:items-center">
         <div className="flex items-center gap-4">
-          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-cream-sunken text-ink">
+          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-cream-sunken text-ink" aria-hidden="true">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 4v11" />
               <polyline points="8 11 12 15 16 11" />
@@ -443,7 +736,12 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
           </div>
         </div>
         {vm.downloadHref ? (
-          <a href={vm.downloadHref} download className="btn btn-yellow">
+          <a
+            href={vm.downloadHref}
+            download
+            className="btn btn-yellow"
+            aria-label={`Download cleaned dataset for ${vm.filename}`}
+          >
             Download CSV
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 4v11" />
@@ -452,7 +750,13 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
             </svg>
           </a>
         ) : (
-          <button type="button" className="btn btn-yellow">
+          <button
+            type="button"
+            className="btn btn-yellow opacity-50 cursor-not-allowed"
+            disabled
+            aria-disabled="true"
+            aria-label="Cleaned dataset unavailable"
+          >
             Download CSV
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 4v11" />
@@ -468,32 +772,71 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
 
 // ------------------------------- data loader --------------------------------
 
+function mapLoadError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.status) {
+      case 404:
+        return "Analysis results not found. The analysis may have expired.";
+      case 422:
+        return "Dataset could not be processed. The file may be invalid.";
+      case 500:
+        return "Backend processing error. Please try again later.";
+      default:
+        return err.message || "Failed to load results.";
+    }
+  }
+  if (err instanceof Error) return err.message;
+  return "An unexpected error occurred.";
+}
+
 function ResultsContent() {
   const params = useSearchParams();
   const fileId = params.get("file_id");
 
   const [vm, setVm] = useState<ResultsVM | null>(fileId ? null : MOCK_VM);
   const [error, setError] = useState<string | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
+
+  const retry = useCallback(() => {
+    setRetryToken((t) => t + 1);
+  }, []);
 
   useEffect(() => {
+    // Marketing preview (no file_id): always show the static mock, and clear
+    // any error/real VM left over from a prior file_id in this session
+    // (Bug 3 -- e.g. /results?file_id=X errored, then user navigates to plain
+    // /results; without clearing, the stale error UI would persist).
     if (!fileId) {
+      setError(null);
       setVm(MOCK_VM);
       return;
     }
+    // New file_id: wipe ALL prior state BEFORE the new response arrives, so no
+    // charts/columns/model data from a previous upload can ever be visible
+    // (Bug 2). vm is a single bundled object rebuilt entirely from the new
+    // response, so nulling it here is a full reset -- nothing is merged.
     let active = true;
     setVm(null);
     setError(null);
+
     getResults(fileId)
-      .then((data) => {
-        if (active) setVm(buildRealVM(data));
+      .then((raw) => {
+        if (!active) return;
+        const parsed = resultsResponseSchema.safeParse(raw);
+        if (!parsed.success) {
+          console.error("Invalid /results response shape:", parsed.error.issues);
+          throw new Error("Backend returned unexpected data structure.");
+        }
+        setVm(buildRealVM(parsed.data));
       })
-      .catch((err) => {
-        if (active) setError(err instanceof ApiError ? err.message : "Failed to load results.");
+      .catch((err: unknown) => {
+        if (active) setError(mapLoadError(err));
       });
+
     return () => {
       active = false;
     };
-  }, [fileId]);
+  }, [fileId, retryToken]);
 
   return (
     <div className="min-h-screen bg-cream">
@@ -507,15 +850,30 @@ function ResultsContent() {
         </div>
 
         {error ? (
-          <div className="mt-6 rounded-[16px] border border-line bg-cream-card px-6 py-10 text-center">
+          <div
+            className="mt-6 rounded-[16px] border border-line bg-cream-card px-6 py-10 text-center"
+            role="alert"
+          >
             <p className="text-sm font-bold text-ink">Couldn&apos;t load results</p>
             <p className="mt-2 text-sm text-muted">{error}</p>
-            <Link href="/upload" className="btn btn-yellow mt-6 inline-flex">Upload a file</Link>
+            <div className="mt-6 flex justify-center gap-4">
+              <button type="button" onClick={retry} className="btn btn-yellow">
+                Retry
+              </button>
+              <Link href="/upload" className="btn">
+                Upload a file
+              </Link>
+            </div>
           </div>
         ) : vm ? (
           <ResultsView vm={vm} />
         ) : (
-          <div className="mt-6 rounded-[16px] border border-line bg-cream-card px-6 py-16 text-center">
+          <div
+            className="mt-6 rounded-[16px] border border-line bg-cream-card px-6 py-16 text-center"
+            role="status"
+            aria-live="polite"
+            aria-busy="true"
+          >
             <p className="label-mono">Loading analysis…</p>
           </div>
         )}

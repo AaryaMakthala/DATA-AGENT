@@ -1,11 +1,10 @@
-
 """LLM provider fallback chain: Groq -> Gemini -> OpenRouter, one call at a time.
 
-The router never calls providers in parallel. It tries Groq first; if that
-raises anything (or exceeds a hard wall-clock timeout), it logs a specific
-reason and tries Gemini; if that also fails, it tries OpenRouter; if all three
-fail, it raises a single clear LLMRouterError with every provider's failure
-reason attached.
+The router never calls providers in parallel *within a single generate() call*.
+It tries Groq first; if that raises anything (or exceeds a hard wall-clock
+timeout), it logs a specific reason and tries Gemini; if that also fails, it
+tries OpenRouter; if all three fail, it raises a single clear LLMRouterError
+with every provider's failure reason attached.
 
 Groq is primary (not Gemini as in the original CLAUDE.md spec) because the
 Gemini free-tier daily quota is routinely exhausted in this deployment, and a
@@ -22,6 +21,23 @@ response carries (e.g. "please retry in 56s") and sleeps/backs off inside
 ~30-60s before falling through. To guarantee we fail over fast, every
 provider call is run in a worker thread and abandoned with `_CALL_TIMEOUT`
 seconds via `future.result(timeout=...)` -- the SDK cannot override that.
+NOTE: `future.cancel()` on a timeout is best-effort only -- once a thread has
+actually started running, `cancel()` cannot stop it, so an abandoned call
+keeps occupying its worker slot in `_executor` until it finishes on its own.
+That's why the pool below is sized larger than "one call at a time" would
+suggest.
+
+Pool sizing: `workflow.py`'s `llm_nodes` step calls `generate()` twice
+*concurrently* (analysis + cleaning plan), and each `generate()` call can
+itself submit up to 3 sequential provider calls if earlier ones fail/time
+out, with an abandoned (but still-running) call from provider N able to
+overlap with the newly-submitted call to provider N+1. Worst case within one
+`llm_nodes` invocation is therefore up to 4 provider calls in flight at once
+(2 concurrent generate() calls x up to 2 overlapping provider attempts each).
+`_executor` is sized to `max_workers=4` for that reason -- with the old
+`max_workers=2`, concurrent generate() calls would queue behind each other's
+abandoned threads, silently defeating the whole point of the hard timeout
+under load.
 """
 
 import concurrent.futures
@@ -50,6 +66,9 @@ _REQUEST_TIMEOUT_SECONDS = 30
 # working call isn't cut off before the SDK's own socket timeout can fire.
 _CALL_TIMEOUT = 40
 
+# See module docstring "Pool sizing" for why this is 4, not 2.
+_EXECUTOR_MAX_WORKERS = 4
+
 
 class LLMRouterError(Exception):
     """Raised when every provider in the fallback chain fails."""
@@ -57,6 +76,16 @@ class LLMRouterError(Exception):
 
 class LLMTimeoutError(Exception):
     """Raised when a single provider call exceeds the hard wall-clock timeout."""
+
+
+class ProviderNotConfiguredError(Exception):
+    """Raised when a single provider's API key is missing.
+
+    Distinct from LLMRouterError (which means *every* provider failed) so
+    that a missing single key isn't ambiguous with a full-chain failure, and
+    so _classify_error can bucket it as a configuration problem rather than
+    an "unexpected error" catch-all.
+    """
 
 
 def _classify_error(exc: Exception) -> str:
@@ -70,9 +99,13 @@ def _classify_error(exc: Exception) -> str:
     name = type(exc).__name__.lower()
     msg = str(exc).lower()
 
+    if isinstance(exc, ProviderNotConfiguredError):
+        return "provider not configured (missing API key)"
+
     key_indicators = (
         "api key not valid", "invalid api key", "api_key_invalid", "invalid_api_key",
         "unauthorized", "401", "permissiondenied", "unauthenticated", "authenticationerror",
+        "not set", "is not configured",
     )
     if any(ind in msg for ind in key_indicators) or any(
         ind in name for ind in ("permissiondenied", "unauthenticated", "authenticationerror")
@@ -108,17 +141,18 @@ class LLMRouter:
             ("Gemini", self._call_gemini),
             ("OpenRouter", self._call_openrouter),
         ]
-        # One shared pool for the blocking .invoke() calls. Daemon threads so a
+        # Shared pool for the blocking .invoke() calls. Daemon threads so a
         # provider call abandoned on timeout can't keep the process alive at
         # shutdown (Python can't forcibly kill the thread, but we stop waiting
-        # on it and move to the next provider immediately).
+        # on it and move to the next provider immediately). See module
+        # docstring "Pool sizing" for why max_workers is 4.
         self._executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="llm-provider"
+            max_workers=_EXECUTOR_MAX_WORKERS, thread_name_prefix="llm-provider"
         )
 
     def _call_gemini(self, prompt: str) -> str:
         if not Config.GEMINI_API_KEY:
-            raise LLMRouterError("GEMINI_API_KEY is not set")
+            raise ProviderNotConfiguredError("GEMINI_API_KEY is not set")
         llm = ChatGoogleGenerativeAI(
             model=GEMINI_MODEL,
             google_api_key=Config.GEMINI_API_KEY,
@@ -129,7 +163,7 @@ class LLMRouter:
 
     def _call_groq(self, prompt: str) -> str:
         if not Config.GROQ_API_KEY:
-            raise LLMRouterError("GROQ_API_KEY is not set")
+            raise ProviderNotConfiguredError("GROQ_API_KEY is not set")
         llm = ChatGroq(
             model=GROQ_MODEL,
             api_key=Config.GROQ_API_KEY,
@@ -140,7 +174,7 @@ class LLMRouter:
 
     def _call_openrouter(self, prompt: str) -> str:
         if not Config.OPENROUTER_API_KEY:
-            raise LLMRouterError("OPENROUTER_API_KEY is not set")
+            raise ProviderNotConfiguredError("OPENROUTER_API_KEY is not set")
         llm = ChatOpenAI(
             model=OPENROUTER_MODEL,
             api_key=Config.OPENROUTER_API_KEY,
@@ -214,3 +248,11 @@ class LLMRouter:
         idx = names.index(current)
         return names[idx + 1] if idx + 1 < len(names) else None
 
+    def shutdown(self) -> None:
+        """Explicitly release the executor's threads.
+
+        Not called automatically anywhere today since `_router` is a
+        process-lifetime singleton, but exposed for tests or any future
+        per-request instantiation of LLMRouter so threads don't leak.
+        """
+        self._executor.shutdown(wait=False, cancel_futures=True)

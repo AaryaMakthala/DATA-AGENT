@@ -8,7 +8,10 @@ class AnalystState(TypedDict, total=False):
 
     Every field is optional at the type level (`total=False`) because the
     graph fills them in progressively -- only `file_path` is guaranteed to
-    be present when the graph starts.
+    be present when the graph starts. `file_id` is generated once by
+    `profiler_node` (the first node) if the caller didn't already seed it,
+    and every downstream node that needs a file_id reads it from state
+    rather than generating its own -- see workflow.py for why that matters.
     """
 
     file_path: str
@@ -25,3 +28,4 @@ class AnalystState(TypedDict, total=False):
     charts: Optional[list[str]]
     report: Optional[str]
     recommendations: Optional[Any]
+    quality_score: Optional[dict[str, Any]]

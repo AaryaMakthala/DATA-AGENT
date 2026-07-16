@@ -21,6 +21,20 @@ _VALID_MISSING_STRATEGIES = {"median", "mode", "drop"}
 _VALID_OUTLIER_STRATEGIES = {"cap", "remove", "keep"}
 _VALID_ENCODING_STRATEGIES = {"one_hot", "none"}
 
+# One-hot encoding a high-cardinality column explodes the frame into thousands
+# of near-empty dummy columns (e.g. a Customer_ID with one dummy per row).
+# Skip encoding when a column has more than this many distinct values or when
+# its unique/row ratio is above _MAX_ENCODE_UNIQUE_RATIO -- such columns are
+# effectively identifiers/free text, not categorical features.
+_MAX_CATEGORIES_FOR_ENCODING = 50
+_MAX_ENCODE_UNIQUE_RATIO = 0.5
+
+# A feature that is almost perfectly correlated with the target is target
+# leakage -- it encodes the answer and would not be available at prediction
+# time. We don't drop it automatically (that's a modeling decision), but we
+# flag it loudly so it surfaces in the report.
+_LEAKAGE_CORRELATION_THRESHOLD = 0.99
+
 # Below this row count, IQR bounds are computed from too few points to be
 # trustworthy, so capping/removal can strip legitimate extreme values. Outliers
 # are still reported in the profile -- we just don't act on them here (CLAUDE.md
@@ -42,6 +56,23 @@ _IDENTIFIER_DROP_REASON = (
 
 class CleanerError(Exception):
     """Raised when the cleaning plan cannot be applied to the dataset."""
+
+
+def _strategy_of(value: Any) -> Any:
+    """Extract the executable strategy from a plan entry.
+
+    The plan entry for a column may be either the flat legacy form (a bare
+    strategy string like "median") or the enriched form the LLM can now return,
+    `{"action": "median", "reason": "...", "confidence": "high"}`. Both are
+    accepted so the richer, self-explaining output stays executable. Anything
+    else returns None (the caller then skips it with a warning).
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        action = value.get("action")
+        return action if isinstance(action, str) else None
+    return None
 
 
 def _sanitize_plan_for_report(cleaning_plan: dict[str, Any], target_column: Optional[str]) -> dict[str, Any]:
@@ -93,12 +124,23 @@ def _fillna_checked(df: pd.DataFrame, column: str, fill_value: Any) -> pd.DataFr
 def _apply_missing_values(df: pd.DataFrame, plan: dict[str, Any], target_column: Optional[str]) -> pd.DataFrame:
     """Impute or drop missing values per-column, following the LLM's plan.
 
+    When a column is imputed (median/mode), a companion `<column>_missing`
+    indicator column (1 where the original value was NaN, else 0) is added
+    first, so the model can still learn from the fact that a value was missing
+    rather than losing that signal to imputation. No indicator is added for the
+    "drop" strategy (those rows leave entirely) or when the column has no
+    missing values.
+
     The target column is never imputed/dropped-on -- see cleaner target
     protection note in `clean_csv`.
     """
-    for column, strategy in plan.items():
+    for column, raw_strategy in plan.items():
+        strategy = _strategy_of(raw_strategy)
         if column not in df.columns:
-            logger.warning("Cleaner: missing_values plan references unknown column '%s'; skipping", column)
+            logger.warning(
+                "Cleaner: missing_values plan references unknown column '%s'; skipping. Available columns: %s",
+                column, list(df.columns),
+            )
             continue
         if column == target_column:
             logger.info("Cleaner: skipping missing_values strategy '%s' for target column '%s' -- target is preserved", strategy, column)
@@ -109,11 +151,22 @@ def _apply_missing_values(df: pd.DataFrame, plan: dict[str, Any], target_column:
             )
             continue
 
+        na_mask = df[column].isna()
         if strategy == "drop":
             before = len(df)
             df = df.dropna(subset=[column])
             logger.info("Cleaner: dropped %d rows with missing '%s'", before - len(df), column)
-        elif strategy == "median":
+            continue
+
+        # median / mode: add the missing-indicator before filling, but only if
+        # there is actually something to indicate.
+        if na_mask.any():
+            indicator = f"{column}_missing"
+            if indicator not in df.columns:
+                df[indicator] = na_mask.astype(int)
+                logger.info("Cleaner: added missing-indicator column '%s' (%d missing)", indicator, int(na_mask.sum()))
+
+        if strategy == "median":
             if pd.api.types.is_numeric_dtype(df[column]):
                 df = _fillna_checked(df, column, df[column].median())
             else:
@@ -132,6 +185,7 @@ def _apply_missing_values(df: pd.DataFrame, plan: dict[str, Any], target_column:
 
 def _apply_duplicates(df: pd.DataFrame, strategy: Any) -> pd.DataFrame:
     """Drop exact duplicate rows if the plan calls for it."""
+    strategy = _strategy_of(strategy)
     if not isinstance(strategy, str):
         return df
     if strategy == "drop":
@@ -164,7 +218,8 @@ def _apply_outliers(df: pd.DataFrame, plan: dict[str, Any], target_column: Optio
         )
         return df
 
-    for column, strategy in plan.items():
+    for column, raw_strategy in plan.items():
+        strategy = _strategy_of(raw_strategy)
         if column not in df.columns:
             logger.warning("Cleaner: outliers plan references unknown column '%s'; skipping", column)
             continue
@@ -204,9 +259,13 @@ def _apply_encoding(df: pd.DataFrame, plan: dict[str, Any], target_column: Optio
     in its original, unmodified form.
     """
     columns_to_encode = []
-    for column, strategy in plan.items():
+    for column, raw_strategy in plan.items():
+        strategy = _strategy_of(raw_strategy)
         if column not in df.columns:
-            logger.warning("Cleaner: encoding plan references unknown column '%s'; skipping", column)
+            logger.warning(
+                "Cleaner: encoding plan references unknown column '%s'; skipping. Available columns: %s",
+                column, list(df.columns),
+            )
             continue
         if column == target_column:
             logger.info("Cleaner: skipping encoding strategy '%s' for target column '%s' -- target is preserved", strategy, column)
@@ -214,13 +273,78 @@ def _apply_encoding(df: pd.DataFrame, plan: dict[str, Any], target_column: Optio
         if strategy not in _VALID_ENCODING_STRATEGIES:
             logger.warning("Cleaner: unrecognized encoding strategy '%s' for column '%s'; skipping", strategy, column)
             continue
-        if strategy == "one_hot":
-            columns_to_encode.append(column)
+        if strategy != "one_hot":
+            continue
+
+        # Guard against one-hot explosion: a high-cardinality column (an ID or
+        # free-text field the LLM mistook for a category) would add thousands
+        # of near-empty dummy columns. Skip it and say why.
+        n_unique = int(df[column].nunique(dropna=True))
+        unique_ratio = n_unique / len(df) if len(df) else 0.0
+        if n_unique > _MAX_CATEGORIES_FOR_ENCODING or unique_ratio > _MAX_ENCODE_UNIQUE_RATIO:
+            logger.warning(
+                "Cleaner: skipping one-hot encoding of '%s' -- %d unique values (ratio %.2f) exceeds "
+                "the %d-category / %.2f-ratio cap; encoding it would explode the feature space",
+                column, n_unique, unique_ratio, _MAX_CATEGORIES_FOR_ENCODING, _MAX_ENCODE_UNIQUE_RATIO,
+            )
+            continue
+        columns_to_encode.append(column)
 
     if columns_to_encode:
         df = pd.get_dummies(df, columns=columns_to_encode, dtype=int)
         logger.info("Cleaner: one-hot encoded columns: %s", columns_to_encode)
     return df
+
+
+def _ensure_not_empty(df: pd.DataFrame, after_step: str) -> None:
+    """Raise if a cleaning step emptied the frame (all rows or all columns gone).
+
+    A plan that drops every row (aggressive missing-value/outlier removal) or
+    every column would otherwise write an unusable CSV that crashes the
+    downstream profiler/visualizer with a raw error. Fail here with a clear,
+    catchable message instead.
+    """
+    if df.shape[0] == 0:
+        raise CleanerError(
+            f"Cleaning left the dataset with no rows after {after_step}. "
+            "The cleaning plan was too aggressive for this data."
+        )
+    if df.shape[1] == 0:
+        raise CleanerError(
+            f"Cleaning left the dataset with no columns after {after_step}."
+        )
+
+
+def _detect_target_leakage(df: pd.DataFrame, target_column: Optional[str]) -> list[str]:
+    """Return feature columns almost perfectly correlated with the target.
+
+    A feature with |corr| > _LEAKAGE_CORRELATION_THRESHOLD against a numeric
+    target effectively encodes the answer (target leakage) and would inflate
+    any model's apparent performance. Only computable when both the target and
+    the feature are numeric; non-numeric targets are skipped. This flags, it
+    does not drop -- removal is a modeling decision left to the user.
+    """
+    if target_column is None or target_column not in df.columns:
+        return []
+    if not pd.api.types.is_numeric_dtype(df[target_column]):
+        return []
+    numeric_features = [
+        c for c in df.select_dtypes(include="number").columns
+        if c != target_column and not c.endswith("_missing")
+    ]
+    leaked: list[str] = []
+    target = df[target_column]
+    for col in numeric_features:
+        if df[col].nunique(dropna=True) <= 1:
+            continue
+        corr = df[col].corr(target)
+        if pd.notna(corr) and abs(corr) > _LEAKAGE_CORRELATION_THRESHOLD:
+            leaked.append(col)
+            logger.warning(
+                "Cleaner: possible target leakage -- feature '%s' correlates %.4f with target '%s'",
+                col, corr, target_column,
+            )
+    return leaked
 
 
 def clean_csv(
@@ -314,12 +438,26 @@ def clean_csv(
     missing_plan = cleaning_plan.get("missing_values")
     if isinstance(missing_plan, dict):
         df = _apply_missing_values(df, missing_plan, target_column)
+    _ensure_not_empty(df, "missing-value handling")
 
     df = _apply_duplicates(df, cleaning_plan.get("duplicates", "keep"))
+    _ensure_not_empty(df, "duplicate removal")
 
     outliers_plan = cleaning_plan.get("outliers")
     if isinstance(outliers_plan, dict):
         df = _apply_outliers(df, outliers_plan, target_column)
+    _ensure_not_empty(df, "outlier removal")
+
+    # Flag (don't drop) any feature that leaks the target -- surfaced in the
+    # report so the user knows to exclude it before modeling.
+    leaked = _detect_target_leakage(df, target_column)
+    if leaked:
+        applied_plan = dict(applied_plan)
+        applied_plan["leakage_warnings"] = {
+            col: f"Correlates >{_LEAKAGE_CORRELATION_THRESHOLD:.2f} with target '{target_column}' -- "
+                 "likely target leakage; consider excluding it before modeling."
+            for col in leaked
+        }
 
     # Snapshot for visualization BEFORE one-hot encoding (Issue 3): charts must
     # be drawn from the original categorical columns, not the dummy columns.

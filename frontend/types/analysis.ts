@@ -34,9 +34,11 @@ export interface DatasetProfile {
   shape: { rows: number; columns: number };
   columns: Record<string, string>;
   missing_values: Record<string, number>;
+  missing_value_percentages?: Record<string, number>;
   duplicates: number;
   numeric_summary: Record<string, NumericColumnSummary>;
   categorical_summary: Record<string, CategoricalColumnSummary>;
+  datetime_columns?: Record<string, Record<string, string | number>>;
   outliers: Record<string, OutlierSummary>;
   correlations: Record<string, Record<string, number | null>>;
 }
@@ -97,6 +99,15 @@ export interface DataValidity {
   valid: boolean;
   errors: string[];
   warnings: string[];
+  duplicate_percentage?: number;
+}
+
+/** Deterministic 0-100 data quality score (computed in Python, no LLM) plus
+ * the per-component sub-scores and the ordered issues that lowered it. */
+export interface QualityScore {
+  quality_score: number;
+  components: Record<string, number>;
+  issues: string[];
 }
 
 export interface AnalyzeResponse {
@@ -104,6 +115,7 @@ export interface AnalyzeResponse {
   status: string;
   profile: DatasetProfile | null;
   data_validity: DataValidity | null;
+  quality_score: QualityScore | null;
   report: string | null;
   cleaning_plan: CleaningPlan | null;
   cleaned_file: string | null;

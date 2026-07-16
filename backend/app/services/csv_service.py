@@ -1,4 +1,9 @@
-"""Upload-time CSV validation, separate from the deep statistical profiling."""
+"""
+CSV validation service.
+
+Provides lightweight validation of uploaded CSV files before running the
+full statistical profiler.
+"""
 
 from pathlib import Path
 
@@ -9,24 +14,53 @@ logger = get_logger(__name__)
 
 
 class CSVServiceError(Exception):
-    """Raised when an uploaded CSV fails a basic parseability check."""
+    """Raised when CSV validation fails."""
 
 
 def validate_and_preview(file_path: Path) -> dict[str, int]:
-    """Confirm a CSV is parseable and return a quick row/column preview.
+    """
+    Validate that a CSV can be parsed and return a quick preview.
 
-    Args:
-        file_path: Path to the CSV on disk.
+    Parameters
+    ----------
+    file_path:
+        Path to the uploaded CSV.
 
-    Returns:
-        {"rows": int, "columns": int}
+    Returns
+    -------
+    dict
+        {
+            "rows": int,
+            "columns": int
+        }
 
-    Raises:
-        CSVServiceError: if the CSV cannot be parsed (empty, corrupted, encoding issues).
+    Raises
+    ------
+    CSVServiceError
+        If parsing fails.
     """
     try:
         df = load_dataframe(str(file_path))
+
     except ProfilerError as exc:
+        logger.warning("CSV validation failed: %s", exc)
         raise CSVServiceError(str(exc)) from exc
 
-    return {"rows": int(df.shape[0]), "columns": int(df.shape[1])}
+    except Exception as exc:
+        logger.exception("Unexpected CSV validation error")
+        raise CSVServiceError(
+            "Unexpected error while reading CSV."
+        ) from exc
+
+    preview = {
+        "rows": int(df.shape[0]),
+        "columns": int(df.shape[1]),
+    }
+
+    logger.info(
+        "CSV validated successfully (%d rows, %d columns)",
+        preview["rows"],
+        preview["columns"],
+    )
+
+    return preview
