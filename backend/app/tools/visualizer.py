@@ -30,6 +30,9 @@ _MAX_BAR_CHARTS = 10
 _MAX_HISTOGRAMS = 15
 _MAX_SCATTER_PAIRS = 5
 _MAX_BAR_CATEGORIES = 20  # categories shown per bar chart; beyond this the chart is unreadable and skipped
+_CARDINALITY_THRESHOLD = 15  # numeric columns with fewer unique values are treated as categorical
+_SKEW_THRESHOLD = 0.5  # |mean - median| / std; above this, histogram uses log scale
+_ID_UNIQUENESS_THRESHOLD = 0.95  # columns with uniqueness ratio above this are excluded from correlation
 
 
 class VisualizerError(Exception):
@@ -68,8 +71,19 @@ def _histogram(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> st
     if series.empty:
         return None
 
+    # Detect skew: |mean - median| / std
+    use_log = False
+    if series.std() > 0:
+        skew_measure = abs(series.mean() - series.median()) / series.std()
+        if skew_measure > _SKEW_THRESHOLD:
+            use_log = True
+            logger.info(
+                "Visualizer: applying log scale to histogram for '%s' (skew measure %.2f > %.2f)",
+                column, skew_measure, _SKEW_THRESHOLD,
+            )
+
     fig, ax = plt.subplots(figsize=(8, 5))
-    sns.histplot(series, kde=True, ax=ax, color="steelblue")
+    sns.histplot(series, kde=True, ax=ax, color="steelblue", log_scale=use_log)
     ax.set_title(f"Distribution of '{column}'")
     ax.set_xlabel(column)
     ax.set_ylabel("frequency")
@@ -103,8 +117,26 @@ def _correlation_heatmap(df: pd.DataFrame, numeric_cols: list[str], out_dir: Pat
     if len(numeric_cols) < 2:
         return None
 
-    corr = df[numeric_cols].corr()
-    fig, ax = plt.subplots(figsize=(max(6, len(numeric_cols)), max(5, len(numeric_cols) * 0.8)))
+    # Filter out ID-like columns: near-unique values or sequential integers
+    filtered_cols = []
+    for col in numeric_cols:
+        series = df[col].dropna()
+        if series.empty:
+            continue
+        uniqueness_ratio = series.nunique() / len(series)
+        if uniqueness_ratio > _ID_UNIQUENESS_THRESHOLD:
+            logger.info(
+                "Visualizer: excluding '%s' from correlation heatmap (uniqueness %.2f > %.2f, likely an ID)",
+                col, uniqueness_ratio, _ID_UNIQUENESS_THRESHOLD,
+            )
+            continue
+        filtered_cols.append(col)
+
+    if len(filtered_cols) < 2:
+        return None
+
+    corr = df[filtered_cols].corr()
+    fig, ax = plt.subplots(figsize=(max(6, len(filtered_cols)), max(5, len(filtered_cols) * 0.8)))
     sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", center=0, ax=ax)
     ax.set_title("Correlation matrix")
     fig.tight_layout()
@@ -153,8 +185,23 @@ def generate_charts(file_path: str, file_id: str) -> list[str]:
     except ProfilerError as exc:
         raise VisualizerError(f"Cannot visualize unreadable CSV: {exc}") from exc
 
-    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+    # Classify columns: dtype + cardinality check
+    # Numeric columns with low cardinality (≤ threshold) are routed to bar charts, not histograms/scatter/heatmap
+    numeric_dtype_cols = df.select_dtypes(include="number").columns.tolist()
     categorical_cols = df.select_dtypes(exclude="number").columns.tolist()
+
+    # Separate truly continuous numeric from low-cardinality numeric
+    continuous_numeric_cols = []
+    for col in numeric_dtype_cols:
+        nunique = df[col].nunique()
+        if nunique <= _CARDINALITY_THRESHOLD:
+            logger.info(
+                "Visualizer: treating numeric column '%s' as categorical (%d unique values ≤ %d)",
+                col, nunique, _CARDINALITY_THRESHOLD,
+            )
+            categorical_cols.append(col)
+        else:
+            continuous_numeric_cols.append(col)
 
     out_dir = Config.CHARTS_FOLDER
     chart_paths: list[str] = []
@@ -164,17 +211,17 @@ def generate_charts(file_path: str, file_id: str) -> list[str]:
         if path:
             chart_paths.append(path)
 
-    for column in numeric_cols[:_MAX_HISTOGRAMS]:
+    for column in continuous_numeric_cols[:_MAX_HISTOGRAMS]:
         path = _histogram(df, column, out_dir, file_id)
         if path:
             chart_paths.append(path)
 
-    for col_x, col_y in _top_correlated_pairs(df, numeric_cols, _MAX_SCATTER_PAIRS):
+    for col_x, col_y in _top_correlated_pairs(df, continuous_numeric_cols, _MAX_SCATTER_PAIRS):
         path = _scatter_plot(df, col_x, col_y, out_dir, file_id)
         if path:
             chart_paths.append(path)
 
-    heatmap_path = _correlation_heatmap(df, numeric_cols, out_dir, file_id)
+    heatmap_path = _correlation_heatmap(df, continuous_numeric_cols, out_dir, file_id)
     if heatmap_path:
         chart_paths.append(heatmap_path)
 
