@@ -21,6 +21,12 @@ _VALID_MISSING_STRATEGIES = {"median", "mode", "drop"}
 _VALID_OUTLIER_STRATEGIES = {"cap", "remove", "keep"}
 _VALID_ENCODING_STRATEGIES = {"one_hot", "none"}
 
+# Below this row count, IQR bounds are computed from too few points to be
+# trustworthy, so capping/removal can strip legitimate extreme values. Outliers
+# are still reported in the profile -- we just don't act on them here (CLAUDE.md
+# Known Bugs, Issue 9).
+_MIN_ROWS_FOR_OUTLIER_ACTION = 30
+
 # Shown in place of whatever the LLM's raw plan proposed for the target column
 # under missing_values/outliers/encoding -- those steps never actually run
 # against the target (see the *_protection notes below), so the report must
@@ -61,6 +67,29 @@ def _sanitize_plan_for_report(cleaning_plan: dict[str, Any], target_column: Opti
     return sanitized
 
 
+def _fillna_checked(df: pd.DataFrame, column: str, fill_value: Any) -> pd.DataFrame:
+    """Fill missing values in `column` and verify no pre-existing value changed.
+
+    Imputation must only ever populate cells that were NaN -- it must never
+    alter a value that was already present (CLAUDE.md Known Bugs, Issue 8). We
+    snapshot the non-null cells before filling and compare after; a mismatch
+    means the imputation logic has a bug (not user error), so we log a loud
+    warning rather than silently corrupting real data.
+    """
+    non_null_mask = df[column].notna()
+    before = df.loc[non_null_mask, column].copy()
+    df[column] = df[column].fillna(fill_value)
+    after = df.loc[non_null_mask, column]
+    if not before.equals(after):
+        logger.warning(
+            "Cleaner: imputation altered %d pre-existing non-null value(s) in column '%s' -- "
+            "this indicates a bug in the imputation logic, not user data",
+            int((before.values != after.values).sum()),
+            column,
+        )
+    return df
+
+
 def _apply_missing_values(df: pd.DataFrame, plan: dict[str, Any], target_column: Optional[str]) -> pd.DataFrame:
     """Impute or drop missing values per-column, following the LLM's plan.
 
@@ -86,18 +115,18 @@ def _apply_missing_values(df: pd.DataFrame, plan: dict[str, Any], target_column:
             logger.info("Cleaner: dropped %d rows with missing '%s'", before - len(df), column)
         elif strategy == "median":
             if pd.api.types.is_numeric_dtype(df[column]):
-                df[column] = df[column].fillna(df[column].median())
+                df = _fillna_checked(df, column, df[column].median())
             else:
                 logger.warning(
                     "Cleaner: 'median' requested for non-numeric column '%s'; falling back to mode", column
                 )
                 mode = df[column].mode(dropna=True)
                 if not mode.empty:
-                    df[column] = df[column].fillna(mode.iloc[0])
+                    df = _fillna_checked(df, column, mode.iloc[0])
         elif strategy == "mode":
             mode = df[column].mode(dropna=True)
             if not mode.empty:
-                df[column] = df[column].fillna(mode.iloc[0])
+                df = _fillna_checked(df, column, mode.iloc[0])
     return df
 
 
@@ -122,7 +151,19 @@ def _apply_outliers(df: pd.DataFrame, plan: dict[str, Any], target_column: Optio
     binary 0/1 Target is not an "outlier" just because one class is rare,
     and removing those rows silently collapses the target to a single class
     (see CLAUDE.md Known Bugs, Issue 6).
+
+    On datasets under `_MIN_ROWS_FOR_OUTLIER_ACTION` rows, IQR bounds are too
+    unreliable to act on, so capping/removal is skipped entirely and the
+    outliers are left for the profile/report to surface (Known Bugs, Issue 9).
     """
+    if len(df) < _MIN_ROWS_FOR_OUTLIER_ACTION:
+        logger.info(
+            "Cleaner: only %d rows (< %d) -- skipping all outlier capping/removal; "
+            "outliers are reported in the profile but not acted on",
+            len(df), _MIN_ROWS_FOR_OUTLIER_ACTION,
+        )
+        return df
+
     for column, strategy in plan.items():
         if column not in df.columns:
             logger.warning("Cleaner: outliers plan references unknown column '%s'; skipping", column)
@@ -148,7 +189,10 @@ def _apply_outliers(df: pd.DataFrame, plan: dict[str, Any], target_column: Optio
             logger.info("Cleaner: capped outliers in '%s' to [%.4f, %.4f]", column, lower, upper)
         elif strategy == "remove":
             before = len(df)
-            df = df[df[column].isna() | df[column].between(lower, upper)]
+            # Copy after boolean-mask filtering so later per-column assignments
+            # (capping another column) operate on their own frame, not a slice
+            # view of the original (avoids SettingWithCopyWarning + silent no-ops).
+            df = df[df[column].isna() | df[column].between(lower, upper)].copy()
             logger.info("Cleaner: removed %d outlier rows from '%s'", before - len(df), column)
     return df
 

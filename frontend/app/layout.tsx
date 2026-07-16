@@ -1,16 +1,26 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Playfair_Display, Inter, Space_Mono } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// Serif display face for headlines (with italic emphasis, per the references).
+const fontDisplay = Playfair_Display({
+  variable: "--font-display-src",
+  subsets: ["latin"],
+  weight: ["400", "700", "900"],
+  style: ["normal", "italic"],
+});
+
+// Clean sans for body copy.
+const fontBody = Inter({
+  variable: "--font-body-src",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+// Mono for uppercase labels, nav links, and buttons.
+const fontMono = Space_Mono({
+  variable: "--font-mono-src",
   subsets: ["latin"],
+  weight: ["400", "700"],
 });
 
 export const metadata: Metadata = {
@@ -26,29 +36,9 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${fontDisplay.variable} ${fontBody.variable} ${fontMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-slate-50 text-slate-900">
-        <header className="border-b border-slate-200 bg-white">
-          <nav className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-            <Link href="/" className="text-base font-semibold text-slate-900">
-              AI Data Analyst
-            </Link>
-            <Link
-              href="/upload"
-              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-500"
-            >
-              Upload CSV
-            </Link>
-          </nav>
-        </header>
-        <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-6 py-10">
-          {children}
-        </main>
-        <footer className="border-t border-slate-200 bg-white py-6 text-center text-xs text-slate-400">
-          AI Data Analyst — profiling and cleaning run entirely in Python; the LLM never touches raw data.
-        </footer>
-      </body>
+      <body className="min-h-full bg-cream text-ink">{children}</body>
     </html>
   );
 }

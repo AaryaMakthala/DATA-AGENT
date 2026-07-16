@@ -41,6 +41,21 @@ export default function CleaningReport({ report, cleaningPlan }: CleaningReportP
           <PlanList title="Missing values" entries={cleaningPlan.missing_values} />
           <PlanList title="Outlier handling" entries={cleaningPlan.outliers} />
           <PlanList title="Categorical encoding" entries={cleaningPlan.encoding} />
+          {cleaningPlan.dropped_columns && Object.keys(cleaningPlan.dropped_columns).length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium text-slate-700">Dropped columns</h3>
+              <ul className="mt-1 flex flex-col gap-1">
+                {Object.entries(cleaningPlan.dropped_columns).map(([column, reason]) => (
+                  <li key={column} className="text-xs text-slate-600">
+                    <span className="rounded-full bg-rose-100 px-2 py-0.5 font-medium text-rose-700">
+                      {column}
+                    </span>{" "}
+                    {reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {cleaningPlan.duplicates && (
             <p className="text-sm text-slate-700">
               <span className="font-medium">Duplicates:</span> {cleaningPlan.duplicates}

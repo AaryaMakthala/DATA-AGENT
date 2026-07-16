@@ -16,7 +16,12 @@ function chartTitle(path: string): string {
 }
 
 export default function ChartViewer({ charts }: ChartViewerProps) {
-  if (charts.length === 0) {
+  // Defensive: render each chart URL at most once, regardless of whether the
+  // API response ever contains a duplicate. Cheap and harmless when the
+  // list is already unique (the normal case).
+  const uniqueCharts = Array.from(new Set(charts));
+
+  if (uniqueCharts.length === 0) {
     return (
       <section>
         <h2 className="text-lg font-semibold text-slate-900">Charts</h2>
@@ -29,7 +34,7 @@ export default function ChartViewer({ charts }: ChartViewerProps) {
     <section className="flex flex-col gap-4">
       <h2 className="text-lg font-semibold text-slate-900">Charts</h2>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {charts.map((chart) => (
+        {uniqueCharts.map((chart) => (
           <figure key={chart} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
             <div className="relative aspect-[4/3] w-full">
               <Image

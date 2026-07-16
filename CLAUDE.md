@@ -368,3 +368,31 @@ first.
 At the end of every phase: run it, show me it actually works (server logs, a curl
 response, a screenshot description, whatever's relevant), and only then proceed.
 
+## Known Bugs — Required Fixes (found during Phase 5 testing, confirmed against real data)
+
+These are not optional polish — they produce incorrect output and must be fixed
+before Phase 6. See CLAUDE_FIXES_AND_DESIGN.md for full details and verification
+steps for each. Summary, in required fix order:
+
+1. **Outlier cleaning must never modify the target column.** Confirmed root cause:
+   on classification_dataset.csv (Target: 94 zeros, 6 ones), IQR outlier removal
+   strips the 6 minority-class rows because they read as statistical outliers on a
+   binary column, leaving Target with 1 unique value by the time it reaches the
+   recommender. Exclude target_column from all outlier detection/capping/removal,
+   for every problem type.
+2. **Reject single/zero-class targets outright.** If nunique(target) <= 1, return
+   problem_type="invalid" and stop recommending models. This must exist as a
+   backstop even after #1 is fixed.
+3. **Target detection must run on the original dataframe, before one-hot
+   encoding** — never re-derive target/problem-type from encoded columns.
+4. **Visualization must run before one-hot encoding**, or must explicitly exclude
+   encoded dummy columns from scatter/histogram generation. Charts like
+   "Education_Bachelor vs Education_High School" (dummy-vs-dummy scatter plots)
+   are structurally meaningless and must not be generated.
+5. **Identifier columns (ID, Name, Customer_ID, etc.) must be excluded** from
+   charts and from ML feature reasoning — detect via name pattern + uniqueness
+   ratio on non-numeric columns.
+
+Do not proceed to Phase 6 (README) until all five are fixed and verified against
+classification_dataset.csv, sample_with_nan.csv, and a no-target dataset, with
+actual response output pasted as proof — not just "it works now."

@@ -1,3 +1,4 @@
+
 """LLM provider fallback chain: Groq -> Gemini -> OpenRouter, one call at a time.
 
 The router never calls providers in parallel. It tries Groq first; if that
