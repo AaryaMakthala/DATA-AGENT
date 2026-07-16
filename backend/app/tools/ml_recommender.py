@@ -480,17 +480,37 @@ def _class_balance_signal(df: pd.DataFrame, target_column: str) -> tuple[bool, s
     return imbalanced, f"class distribution is {descriptor} (minority/majority ratio {ratio:.2f})"
 
 
+def _format_minority_fraction(fraction: float) -> str:
+    """Format a minority-class share so extreme imbalance never rounds to '0%'.
+
+    A 1-in-100,000 minority is 0.001%, which `{:.0%}` renders as a misleading
+    "0%". Pick enough decimal places to always show a non-zero figure: whole
+    percents down to 1%, then progressively finer precision for rarer classes.
+    """
+    percent = fraction * 100
+    if percent >= 1:
+        return f"{percent:.0f}%"
+    if percent >= 0.1:
+        return f"{percent:.1f}%"
+    if percent >= 0.01:
+        return f"{percent:.2f}%"
+    return f"{percent:.2g}%"
+
+
 def _class_imbalance_warning(df: pd.DataFrame, target_column: str) -> Optional[str]:
     """Return a user-facing warning if the smallest class is under ~10% of rows (Issue 10)."""
     counts = df[target_column].dropna().value_counts()
     total = int(counts.sum())
     if len(counts) < 2 or total == 0:
         return None
-    minority_fraction = counts.min() / total
+    minority_count = int(counts.min())
+    minority_fraction = minority_count / total
     if minority_fraction >= _MINORITY_CLASS_WARNING_FRACTION:
         return None
+    share = _format_minority_fraction(minority_fraction)
     return (
-        f"Target classes are highly imbalanced (minority class: {minority_fraction:.0%} of rows). "
+        f"Target classes are highly imbalanced (minority class: {share} of rows -- "
+        f"{minority_count:,} of {total:,}). "
         "Consider class weights, oversampling, or stratified splitting when training."
     )
 

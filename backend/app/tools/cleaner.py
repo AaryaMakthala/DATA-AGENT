@@ -292,6 +292,19 @@ def clean_csv(
         col for col in (identifier_columns or [])
         if col in df.columns and col != target_column
     ]
+    # Backstop: never drop every remaining column. The validator gates all-
+    # identifier datasets to the invalid state before cleaning runs, so in the
+    # real pipeline this is unreachable -- but if clean_csv is ever called
+    # directly on such a frame, dropping all columns would write a zero-column
+    # CSV that crashes the profiler ("no columns to parse"). Keep the columns
+    # instead of producing an unreadable file.
+    if dropped and len(dropped) >= df.shape[1]:
+        logger.warning(
+            "Cleaner: identifier drop would remove all %d columns; keeping them to avoid "
+            "an empty dataset (dataset should have been gated as invalid upstream)",
+            df.shape[1],
+        )
+        dropped = []
     if dropped:
         df = df.drop(columns=dropped)
         applied_plan = dict(applied_plan)

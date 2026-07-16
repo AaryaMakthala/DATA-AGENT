@@ -111,7 +111,11 @@ def validation_node(state: AnalystState) -> dict:
     except ProfilerError as exc:
         logger.error("Graph: validation node failed to load CSV: %s", exc)
         raise
-    data_validity = validate_dataset(df, state.get("target_column"))
+    data_validity = validate_dataset(
+        df,
+        state.get("target_column"),
+        state.get("identifier_columns"),
+    )
     return {"data_validity": data_validity}
 
 

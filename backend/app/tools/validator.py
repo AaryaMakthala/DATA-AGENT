@@ -26,7 +26,11 @@ logger = get_logger(__name__)
 _MIN_ROWS_WARNING = 5
 
 
-def validate_dataset(df: pd.DataFrame, target_column: Optional[str]) -> dict[str, Any]:
+def validate_dataset(
+    df: pd.DataFrame,
+    target_column: Optional[str],
+    identifier_columns: Optional[list[str]] = None,
+) -> dict[str, Any]:
     """Decide whether a dataset (and its detected target, if any) can be modeled.
 
     Args:
@@ -35,6 +39,13 @@ def validate_dataset(df: pd.DataFrame, target_column: Optional[str]) -> dict[str
         target_column: The target column detected by
             `ml_recommender.detect_target_column` on this same original
             dataframe, or None if the dataset looks unsupervised.
+        identifier_columns: Columns detected as identifiers by
+            `ml_recommender.detect_identifier_columns`. Used to confirm at
+            least one real feature column would survive cleaning -- a dataset
+            whose every column is an identifier (or whose only column is the
+            target) has nothing to model and, left ungated, makes the cleaner
+            drop every column and write an empty CSV that crashes downstream
+            profiling/visualization.
 
     Returns:
         {"valid": bool, "errors": list[str], "warnings": list[str]}.
@@ -57,6 +68,21 @@ def validate_dataset(df: pd.DataFrame, target_column: Optional[str]) -> dict[str
         cardinality_error = check_target_cardinality(df, target_column)
         if cardinality_error is not None:
             errors.append(cardinality_error)
+
+    # No feature columns would survive cleaning: every column is either the
+    # target or an identifier (which the cleaner drops). Without this gate the
+    # cleaner produces a zero-column CSV that crashes the profiler/visualizer
+    # with a raw 500 instead of the graceful "can't be analyzed" response.
+    identifiers = set(identifier_columns or [])
+    feature_columns = [
+        col for col in df.columns if col != target_column and col not in identifiers
+    ]
+    if df.shape[1] > 0 and not feature_columns:
+        errors.append(
+            "No usable feature columns remain: every column looks like an identifier "
+            "(unique IDs, names, or free text) or the target. There is nothing for a "
+            "model to learn from."
+        )
 
     if 0 < df.shape[0] < _MIN_ROWS_WARNING:
         warnings.append(
