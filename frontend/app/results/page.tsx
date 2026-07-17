@@ -11,15 +11,16 @@ import { ApiError, getResults, resolveAssetUrl } from "@/lib/api";
 /**
  * Results page. Two modes:
  *  - No `file_id` in the URL (visited from marketing nav): renders STATIC MOCK
- *    data as a product preview. The inline SVG charts and hardcoded metrics
- *    below serve this path only.
+ *    data as a product preview.
  *  - `file_id` present (after a real upload): fetches GET /results/{file_id}
- *    and renders real profile stats, real generated chart PNGs, and the real
- *    heuristic recommendation.
+ *    and renders real profile stats, real generated chart PNGs, real
+ *    heuristic recommendation, and (when the backend sends them) the richer
+ *    sections below: executive summary, dataset overview, quality breakdown,
+ *    cleaning report, correlation highlights, and warnings.
  *
- * Note on "score": the backend recommender is heuristic-only and trains no
- * models (CLAUDE.md §9), so there is NO performance percentage. Real mode
- * shows the recommender's confidence labels + reasoning instead of a metric.
+ * IMPORTANT: every "extra" field beyond the original schema is `.nullish()`.
+ * If your backend doesn't send it yet, the corresponding UI section is
+ * simply omitted — this file will never throw on a partial response.
  */
 
 // ----------------------------- shared view-model -----------------------------
@@ -33,13 +34,49 @@ interface CardVM {
 }
 
 interface ChartVM {
-  /** Stable React key (path for real charts, id for mock). */
   key: string;
   title: string;
-  /** Mock mode: inline SVG. Real mode: omit and use `url`. */
   node?: React.ReactNode;
-  /** Real mode: validated absolute URL for a backend chart PNG. */
   url?: string;
+}
+
+interface OverviewVM {
+  problemType?: string;
+  target?: string;
+  numericFeatures?: number;
+  categoricalFeatures?: number;
+  missingTotal?: number;
+  duplicates?: number;
+  outliersTotal?: number;
+}
+
+interface QualityVM {
+  score: number;
+  issues: string[];
+  components?: { label: string; value: number }[];
+}
+
+interface CleaningVM {
+  rowsRemoved?: number;
+  duplicatesRemoved?: number;
+  outliersCapped?: number;
+  columnsEncoded?: number;
+  droppedColumns?: string[];
+}
+
+interface CorrelationVM {
+  a: string;
+  b: string;
+  value: number;
+}
+
+interface StatRowVM {
+  column: string;
+  mean?: number;
+  median?: number;
+  std?: number;
+  min?: number;
+  max?: number;
 }
 
 interface ResultsVM {
@@ -47,11 +84,9 @@ interface ResultsVM {
   filename: string;
   rows: string;
   cols: string;
-  /** Set only when the backend rejected this dataset (data_validity.valid ===
-   * false, or recommendations.problem_type === "invalid"). When present, the
-   * page renders ONLY this message + a "Try a different file" action, and no
-   * Best Model / Comparison / Visual Insights UI is rendered at all. */
   invalidMessage?: string;
+  executiveSummary?: string;
+  overview?: OverviewVM;
   best: {
     recommendedLabel: string;
     name: string;
@@ -67,12 +102,22 @@ interface ResultsVM {
   models: CardVM[];
   charts: ChartVM[];
   downloadHref?: string;
-  /** Deterministic data-quality score (0-100) + issues, when the backend
-   * computed one. Rendered as a compact card above the best-model section. */
-  quality?: { score: number; issues: string[] };
+  quality?: QualityVM;
+  cleaning?: CleaningVM;
+  correlations?: CorrelationVM[];
+  stats?: StatRowVM[];
+  warnings?: string[];
 }
 
 // --------------------------- Zod response validation -------------------------
+
+const numericStatSchema = z.object({
+  mean: z.number().nullish(),
+  median: z.number().nullish(),
+  std: z.number().nullish(),
+  min: z.number().nullish(),
+  max: z.number().nullish(),
+});
 
 const resultsResponseSchema = z
   .object({
@@ -83,17 +128,7 @@ const resultsResponseSchema = z
           rows: z.number(),
           columns: z.number(),
         }),
-        numeric_summary: z
-          .record(
-            z.object({
-              mean: z.number().nullish(),
-              median: z.number().nullish(),
-              std: z.number().nullish(),
-              min: z.number().nullish(),
-              max: z.number().nullish(),
-            })
-          )
-          .nullish(),
+        numeric_summary: z.record(numericStatSchema).nullish(),
         categorical_summary: z.record(z.unknown()).nullish(),
         missing_values: z.record(z.number()).nullish(),
         duplicates: z.number().nullish(),
@@ -109,6 +144,7 @@ const resultsResponseSchema = z
       .object({
         valid: z.boolean(),
         errors: z.array(z.string()).nullish().transform((v) => v ?? []),
+        warnings: z.array(z.string()).nullish().transform((v) => v ?? []),
       })
       .passthrough()
       .nullish(),
@@ -116,6 +152,17 @@ const resultsResponseSchema = z
       .object({
         quality_score: z.number(),
         issues: z.array(z.string()).nullish().transform((v) => v ?? []),
+        components: z.record(z.number()).nullish(),
+      })
+      .passthrough()
+      .nullish(),
+    cleaning_summary: z
+      .object({
+        rows_removed: z.number().nullish(),
+        duplicates_removed: z.number().nullish(),
+        outliers_capped: z.number().nullish(),
+        columns_encoded: z.number().nullish(),
+        dropped_columns: z.array(z.string()).nullish(),
       })
       .passthrough()
       .nullish(),
@@ -138,6 +185,7 @@ const resultsResponseSchema = z
           .nullish()
           .transform((v) => v ?? []),
         top_recommendation: z.string().nullish(),
+        warnings: z.array(z.string()).nullish(),
       })
       .passthrough()
       .nullish(),
@@ -279,6 +327,17 @@ const MOCK_VM: ResultsVM = {
   filename: "sales_data.csv",
   rows: "1,250",
   cols: "15",
+  executiveSummary:
+    "This dataset contains 1,250 sales records with 15 columns and appears well-suited for a regression problem predicting revenue. Data quality is good (92/100). Random Forest is recommended because it handles the mix of numeric and categorical features and the moderate outlier count well. The main watch-item is two highly correlated feature pairs.",
+  overview: {
+    problemType: "Regression",
+    target: "Revenue",
+    numericFeatures: 11,
+    categoricalFeatures: 4,
+    missingTotal: 38,
+    duplicates: 6,
+    outliersTotal: 22,
+  },
   best: {
     recommendedLabel: "Recommended Model",
     name: "Random Forest Regressor",
@@ -292,11 +351,11 @@ const MOCK_VM: ResultsVM = {
     scaleRight: "100%",
   },
   models: [
-    { name: "Random Forest", value: "92%", tag: "Best Fit", isBest: true },
-    { name: "XGBoost", value: "89%", tag: "Excellent", isBest: false },
-    { name: "Gradient Boosting", value: "87%", tag: "Very Good", isBest: false },
-    { name: "Linear Regression", value: "74%", tag: "Good", isBest: false },
-    { name: "SVR", value: "68%", tag: "Average", isBest: false },
+    { name: "Random Forest", value: "92%", tag: "Best Fit", isBest: true, reason: "Robust to outliers and mixed feature types." },
+    { name: "XGBoost", value: "89%", tag: "Excellent", isBest: false, reason: "Fast, strong on structured tabular data." },
+    { name: "Gradient Boosting", value: "87%", tag: "Very Good", isBest: false, reason: "Handles nonlinear relationships well." },
+    { name: "Linear Regression", value: "74%", tag: "Good", isBest: false, reason: "Simple baseline, less robust to outliers." },
+    { name: "SVR", value: "68%", tag: "Average", isBest: false, reason: "Sensitive to feature scaling on this data." },
   ],
   charts: [
     { key: "mock-donut", title: "Target Distribution", node: <DonutChart /> },
@@ -306,6 +365,34 @@ const MOCK_VM: ResultsVM = {
     { key: "mock-heat", title: "Correlation Heatmap", node: <HeatmapChart /> },
     { key: "mock-box", title: "Prediction Error", node: <BoxPlotChart /> },
   ],
+  quality: {
+    score: 92,
+    issues: ["Two features are highly correlated (>0.85)", "Minor class imbalance in a categorical column"],
+    components: [
+      { label: "Missing values", value: 95 },
+      { label: "Duplicates", value: 98 },
+      { label: "Outliers", value: 88 },
+      { label: "Feature quality", value: 93 },
+      { label: "Balance", value: 84 },
+    ],
+  },
+  cleaning: {
+    rowsRemoved: 6,
+    duplicatesRemoved: 6,
+    outliersCapped: 22,
+    columnsEncoded: 4,
+    droppedColumns: ["Customer_ID"],
+  },
+  correlations: [
+    { a: "Ad_Spend", b: "Revenue", value: 0.91 },
+    { a: "Store_Size", b: "Foot_Traffic", value: 0.87 },
+  ],
+  stats: [
+    { column: "Revenue", mean: 4820.5, median: 4600, std: 980.2, min: 120, max: 12500 },
+    { column: "Ad_Spend", mean: 1200.4, median: 1100, std: 340.1, min: 50, max: 5200 },
+    { column: "Foot_Traffic", mean: 860.2, median: 820, std: 210.7, min: 40, max: 2100 },
+  ],
+  warnings: ["Two highly correlated feature pairs detected", "One categorical column has high cardinality"],
 };
 
 // --------------------------- real-data transforms ---------------------------
@@ -314,9 +401,13 @@ function formatNumber(n: number): string {
   return n.toLocaleString("en-US");
 }
 
+function round(n: number, digits = 2): number {
+  const f = Math.pow(10, digits);
+  return Math.round(n * f) / f;
+}
+
 /** Placeholder `best` block for invalid datasets. Never rendered -- the
- * invalidMessage branch in ResultsView returns before touching `best` -- but
- * the ResultsVM type requires the field to be present. */
+ * invalidMessage branch in ResultsView returns before touching `best`. */
 const EMPTY_BEST: ResultsVM["best"] = {
   recommendedLabel: "",
   name: "",
@@ -372,12 +463,7 @@ function safeResolveAssetUrl(path: string): string | undefined {
   return resolveAssetUrl(normalized);
 }
 
-/** Turn a generated chart filename into a human-readable title.
- * File IDs are hex (no underscores), so splitting on "_" is safe:
- *   {id}_bar_Department.png      -> "Department Distribution"
- *   {id}_hist_Age.png            -> "Age Distribution"
- *   {id}_scatter_Age_Salary.png  -> "Age vs Salary"
- *   {id}_correlation_heatmap.png -> "Correlation Heatmap" */
+/** Turn a generated chart filename into a human-readable title. */
 function chartTitle(path: string): string {
   const file = path.split("/").pop()?.replace(/\.png$/i, "") ?? path;
   const parts = file.split("_");
@@ -408,17 +494,47 @@ function confidenceToFill(label?: string | null): number {
   }
 }
 
+const QUALITY_COMPONENT_LABELS: Record<string, string> = {
+  missing_values: "Missing values",
+  duplicates: "Duplicates",
+  outliers: "Outliers",
+  feature_quality: "Feature quality",
+  class_balance: "Balance",
+};
+
+/** Extract the top N correlated feature pairs above a threshold, excluding
+ * self-pairs and duplicate (a,b)/(b,a) pairs. */
+function topCorrelations(
+  matrix: Record<string, Record<string, number>> | null | undefined,
+  threshold = 0.75,
+  limit = 6,
+): CorrelationVM[] {
+  if (!matrix) return [];
+  const seen = new Set<string>();
+  const pairs: CorrelationVM[] = [];
+  for (const a of Object.keys(matrix)) {
+    for (const b of Object.keys(matrix[a] ?? {})) {
+      if (a === b) continue;
+      const key = [a, b].sort().join("::");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const value = matrix[a][b];
+      if (typeof value !== "number" || Number.isNaN(value)) continue;
+      if (Math.abs(value) >= threshold) {
+        pairs.push({ a, b, value: round(value, 2) });
+      }
+    }
+  }
+  return pairs.sort((x, y) => Math.abs(y.value) - Math.abs(x.value)).slice(0, limit);
+}
+
 function buildRealVM(data: ValidatedResults): ResultsVM {
   const rec = data.recommendations;
   const rows = data.profile?.shape.rows ?? 0;
   const cols = data.profile?.shape.columns ?? 0;
 
   // Failure gate (Bug 1 + Bug 4): if the backend flagged this dataset as
-  // unusable, surface the real validation error and render NOTHING else --
-  // no best-model card, no comparison grid, no gauge, no charts. The backend
-  // routes validation -> END for these, so recommendations/charts/cleaned_file
-  // arrive as null; rendering the normal VM would produce the broken
-  // "No recommendation / Model Confidence —" UI.
+  // unusable, surface the real validation error and render NOTHING else.
   const validity = data.data_validity;
   const invalidByGate = validity != null && validity.valid === false;
   const invalidByRec = rec?.problem_type === "invalid";
@@ -451,18 +567,90 @@ function buildRealVM(data: ValidatedResults): ResultsVM {
   for (const path of data.charts ?? []) {
     const url = safeResolveAssetUrl(path);
     if (!url) continue;
-    charts.push({
-      key: path,
-      title: chartTitle(path),
-      url,
-    });
+    charts.push({ key: path, title: chartTitle(path), url });
   }
+
+  // --- Dataset overview -------------------------------------------------
+  const profile = data.profile;
+  const missingTotal = profile?.missing_values
+    ? Object.values(profile.missing_values).reduce((sum, v) => sum + v, 0)
+    : undefined;
+  const outliersTotal = profile?.outliers
+    ? Object.values(profile.outliers).reduce((sum, o) => sum + (o?.count ?? 0), 0)
+    : undefined;
+  const numericFeatures = profile?.numeric_summary
+    ? Object.keys(profile.numeric_summary).length
+    : undefined;
+  const categoricalFeatures = profile?.categorical_summary
+    ? Object.keys(profile.categorical_summary).length
+    : undefined;
+
+  const overview: OverviewVM | undefined = profile
+    ? {
+        problemType: rec?.problem_type ?? undefined,
+        target,
+        numericFeatures,
+        categoricalFeatures,
+        missingTotal,
+        duplicates: profile.duplicates ?? undefined,
+        outliersTotal,
+      }
+    : undefined;
+
+  // --- Quality ------------------------------------------------------------
+  const quality: QualityVM | undefined = data.quality_score
+    ? {
+        score: data.quality_score.quality_score,
+        issues: data.quality_score.issues ?? [],
+        components: data.quality_score.components
+          ? Object.entries(data.quality_score.components).map(([key, value]) => ({
+              label: QUALITY_COMPONENT_LABELS[key] ?? key,
+              value,
+            }))
+          : undefined,
+      }
+    : undefined;
+
+  // --- Cleaning report ------------------------------------------------------
+  const cs = data.cleaning_summary;
+  const cleaning: CleaningVM | undefined = cs
+    ? {
+        rowsRemoved: cs.rows_removed ?? undefined,
+        duplicatesRemoved: cs.duplicates_removed ?? undefined,
+        outliersCapped: cs.outliers_capped ?? undefined,
+        columnsEncoded: cs.columns_encoded ?? undefined,
+        droppedColumns: cs.dropped_columns ?? undefined,
+      }
+    : undefined;
+
+  // --- Correlation highlights -----------------------------------------------
+  const correlations = topCorrelations(profile?.correlations);
+
+  // --- Statistical summary ---------------------------------------------------
+  const stats: StatRowVM[] | undefined = profile?.numeric_summary
+    ? Object.entries(profile.numeric_summary).map(([column, s]) => ({
+        column,
+        mean: s.mean ?? undefined,
+        median: s.median ?? undefined,
+        std: s.std ?? undefined,
+        min: s.min ?? undefined,
+        max: s.max ?? undefined,
+      }))
+    : undefined;
+
+  // --- Warnings ---------------------------------------------------------------
+  const warnings = [
+    ...(validity?.warnings ?? []),
+    ...(rec?.warnings ?? []),
+  ];
 
   return {
     isReal: true,
     filename: `${data.file_id}.csv`,
     rows: formatNumber(rows),
     cols: String(cols),
+    executiveSummary: data.report || undefined,
+    overview,
     best: {
       recommendedLabel: "Recommended Model",
       name: rec?.top_recommendation ?? "No recommendation",
@@ -483,12 +671,12 @@ function buildRealVM(data: ValidatedResults): ResultsVM {
       reason: m.reason || undefined,
     })),
     charts,
-    downloadHref: data.cleaned_file
-      ? safeResolveAssetUrl(data.cleaned_file)
-      : undefined,
-    quality: data.quality_score
-      ? { score: data.quality_score.quality_score, issues: data.quality_score.issues ?? [] }
-      : undefined,
+    downloadHref: data.cleaned_file ? safeResolveAssetUrl(data.cleaned_file) : undefined,
+    quality,
+    cleaning,
+    correlations: correlations.length > 0 ? correlations : undefined,
+    stats,
+    warnings: warnings.length > 0 ? warnings : undefined,
   };
 }
 
@@ -531,12 +719,43 @@ function ChartImage({ title, url }: { title: string; url: string }) {
   );
 }
 
+// --------------------------- small presentational bits ----------------------
+
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return <h2 className="mt-12 font-display text-lg font-bold text-ink">{children}</h2>;
+}
+
+function StatCell({ label, value }: { label: string; value: string | number | undefined }) {
+  if (value === undefined) return null;
+  return (
+    <div>
+      <div className="label-mono text-[10px]">{label}</div>
+      <div className="mt-1 font-display text-xl font-bold text-ink">{value}</div>
+    </div>
+  );
+}
+
+function ProgressBar({ label, value }: { label: string; value: number }) {
+  const clamped = Math.max(0, Math.min(100, value));
+  const color = clamped >= 80 ? "#3f9d54" : clamped >= 60 ? "#f4c542" : "#c05a44";
+  return (
+    <div>
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted">{label}</span>
+        <span className="font-bold text-ink">{clamped}</span>
+      </div>
+      <div className="mt-1 h-2 w-full overflow-hidden rounded-pill bg-cream-sunken">
+        <div className="h-full rounded-pill" style={{ width: `${clamped}%`, background: color }} />
+      </div>
+    </div>
+  );
+}
+
 // --------------------------- presentational view ----------------------------
 
 function ResultsView({ vm }: { vm: ResultsVM }) {
   // Invalid-dataset state (Bug 1 + Bug 4): render ONLY the failure message and
-  // a "Try a different file" action. None of the Best Model / Comparison /
-  // Visual Insights / download markup below is reached in this state.
+  // a "Try a different file" action.
   if (vm.invalidMessage) {
     return (
       <div
@@ -586,39 +805,88 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
         <div className="label-mono text-[10px]">{vm.rows} rows · {vm.cols} columns</div>
       </div>
 
+      {/* Executive summary (LLM `report` text) */}
+      {vm.executiveSummary && (
+        <div className="card-elevated mt-6 p-6">
+          <div className="label-mono text-[10px]">Executive Summary</div>
+          <p className="mt-3 text-sm leading-relaxed text-ink">{vm.executiveSummary}</p>
+        </div>
+      )}
+
+      {/* Dataset overview */}
+      {vm.overview && (
+        <div className="card-elevated mt-6 grid grid-cols-2 gap-6 p-6 sm:grid-cols-4">
+          <StatCell label="Problem Type" value={vm.overview.problemType ? cap(vm.overview.problemType) : undefined} />
+          <StatCell label="Target" value={vm.overview.target} />
+          <StatCell label="Numeric Features" value={vm.overview.numericFeatures} />
+          <StatCell label="Categorical Features" value={vm.overview.categoricalFeatures} />
+          <StatCell label="Missing Values" value={vm.overview.missingTotal !== undefined ? formatNumber(vm.overview.missingTotal) : undefined} />
+          <StatCell label="Duplicates" value={vm.overview.duplicates !== undefined ? formatNumber(vm.overview.duplicates) : undefined} />
+          <StatCell label="Outliers" value={vm.overview.outliersTotal !== undefined ? formatNumber(vm.overview.outliersTotal) : undefined} />
+        </div>
+      )}
+
       {/* Data quality score */}
       {vm.quality && (
-        <div className="card-elevated mt-6 flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:gap-8">
-          <div className="flex items-center gap-4">
-            <div
-              className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full text-xl font-bold text-white"
-              style={{
-                background:
-                  vm.quality.score >= 80 ? "#3f9d54" : vm.quality.score >= 60 ? "#f4c542" : "#c05a44",
-              }}
-              aria-label={`Data quality score ${vm.quality.score}`}
-            >
-              {vm.quality.score}
-            </div>
-            <div>
-              <div className="label-mono text-[10px]">Data Quality Score</div>
-              <div className="font-display text-lg font-bold text-ink">
-                {vm.quality.score >= 80 ? "Good" : vm.quality.score >= 60 ? "Fair" : "Needs attention"}
+        <div className="card-elevated mt-6 flex flex-col gap-6 p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-8">
+            <div className="flex items-center gap-4">
+              <div
+                className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full text-xl font-bold text-white"
+                style={{
+                  background:
+                    vm.quality.score >= 80 ? "#3f9d54" : vm.quality.score >= 60 ? "#f4c542" : "#c05a44",
+                }}
+                aria-label={`Data quality score ${vm.quality.score}`}
+              >
+                {vm.quality.score}
+              </div>
+              <div>
+                <div className="label-mono text-[10px]">Data Quality Score</div>
+                <div className="font-display text-lg font-bold text-ink">
+                  {vm.quality.score >= 80 ? "Good" : vm.quality.score >= 60 ? "Fair" : "Needs attention"}
+                </div>
               </div>
             </div>
+            {vm.quality.issues.length > 0 && (
+              <ul className="flex flex-1 flex-col gap-1">
+                {vm.quality.issues.map((issue, i) => (
+                  <li key={i} className="text-xs text-muted">• {issue}</li>
+                ))}
+              </ul>
+            )}
           </div>
-          {vm.quality.issues.length > 0 && (
-            <ul className="flex flex-1 flex-col gap-1">
-              {vm.quality.issues.map((issue, i) => (
-                <li key={i} className="text-xs text-muted">• {issue}</li>
+
+          {vm.quality.components && vm.quality.components.length > 0 && (
+            <div className="grid grid-cols-1 gap-4 border-t border-line pt-5 sm:grid-cols-2 lg:grid-cols-5">
+              {vm.quality.components.map((c) => (
+                <ProgressBar key={c.label} label={c.label} value={c.value} />
               ))}
-            </ul>
+            </div>
           )}
         </div>
       )}
 
+      {/* Cleaning report */}
+      {vm.cleaning && (
+        <>
+          <SectionHeading>Cleaning Report</SectionHeading>
+          <div className="card-elevated mt-5 grid grid-cols-2 gap-6 p-6 sm:grid-cols-4">
+            <StatCell label="Rows Removed" value={vm.cleaning.rowsRemoved} />
+            <StatCell label="Duplicates Removed" value={vm.cleaning.duplicatesRemoved} />
+            <StatCell label="Outliers Capped" value={vm.cleaning.outliersCapped} />
+            <StatCell label="Columns Encoded" value={vm.cleaning.columnsEncoded} />
+          </div>
+          {vm.cleaning.droppedColumns && vm.cleaning.droppedColumns.length > 0 && (
+            <p className="mt-3 text-xs text-muted">
+              Dropped identifier columns: {vm.cleaning.droppedColumns.join(", ")}
+            </p>
+          )}
+        </>
+      )}
+
       {/* Best model heading */}
-      <h1 className="display-heading mt-10 text-4xl sm:text-5xl">
+      <h1 className="display-heading mt-12 text-4xl sm:text-5xl">
         Best Model for{" "}
         <span className="italic underline decoration-mustard decoration-[6px] underline-offset-[8px]">Your Dataset</span>
       </h1>
@@ -669,7 +937,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       </div>
 
       {/* Model comparison */}
-      <h2 className="mt-12 font-display text-lg font-bold text-ink">Model Performance Comparison</h2>
+      <SectionHeading>Model Performance Comparison</SectionHeading>
       <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         {vm.models.map((m) => (
           <div
@@ -697,25 +965,97 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       </div>
 
       {/* Visual insights */}
-      <h2 className="mt-12 font-display text-lg font-bold text-ink">Visual Insights</h2>
-      <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
-        {vm.charts.map((chart) => (
-          <div key={chart.key} className="card !p-5">
-            <div className="mb-4 text-center text-xs font-bold text-ink">{chart.title}</div>
-            <div className="flex items-center justify-center">
-              {chart.url ? (
-                <ChartImage title={chart.title} url={chart.url} />
-              ) : (
-                chart.node
-              )}
-            </div>
+      {vm.charts.length > 0 && (
+        <>
+          <SectionHeading>Visual Insights</SectionHeading>
+          <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
+            {vm.charts.map((chart) => (
+              <div key={chart.key} className="card !p-5">
+                <div className="mb-4 text-center text-xs font-bold text-ink">{chart.title}</div>
+                <div className="flex items-center justify-center">
+                  {chart.url ? <ChartImage title={chart.title} url={chart.url} /> : chart.node}
+                </div>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </>
+      )}
 
-      {/* Stopgap disclaimer until full Terms/Privacy exist. AI-generated model
-          suggestions are heuristic (no model is trained -- CLAUDE.md §9), so
-          they must not be read as professional advice. */}
+      {/* Statistical summary */}
+      {vm.stats && vm.stats.length > 0 && (
+        <>
+          <SectionHeading>Statistical Summary</SectionHeading>
+          <div className="card-elevated mt-5 overflow-x-auto p-2">
+            <table className="w-full min-w-[560px] text-left text-xs">
+              <thead>
+                <tr className="text-muted">
+                  <th className="px-4 py-3 font-bold">Column</th>
+                  <th className="px-4 py-3 font-bold">Mean</th>
+                  <th className="px-4 py-3 font-bold">Median</th>
+                  <th className="px-4 py-3 font-bold">Std Dev</th>
+                  <th className="px-4 py-3 font-bold">Min</th>
+                  <th className="px-4 py-3 font-bold">Max</th>
+                </tr>
+              </thead>
+              <tbody>
+                {vm.stats.map((s) => (
+                  <tr key={s.column} className="border-t border-line">
+                    <td className="px-4 py-3 font-bold text-ink">{s.column}</td>
+                    <td className="px-4 py-3 text-ink">{fmt(s.mean)}</td>
+                    <td className="px-4 py-3 text-ink">{fmt(s.median)}</td>
+                    <td className="px-4 py-3 text-ink">{fmt(s.std)}</td>
+                    <td className="px-4 py-3 text-ink">{fmt(s.min)}</td>
+                    <td className="px-4 py-3 text-ink">{fmt(s.max)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {/* Correlation highlights */}
+      {vm.correlations && vm.correlations.length > 0 && (
+        <>
+          <SectionHeading>Correlation Highlights</SectionHeading>
+          <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {vm.correlations.map((c) => (
+              <div key={`${c.a}-${c.b}`} className="card !p-4 flex items-center justify-between">
+                <span className="text-sm text-ink">{c.a} ↔ {c.b}</span>
+                <span className="font-display text-lg font-bold text-ink">{c.value.toFixed(2)}</span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-muted">High correlation between features may indicate multicollinearity.</p>
+        </>
+      )}
+
+      {/* Warnings */}
+      {vm.warnings && vm.warnings.length > 0 && (
+        <>
+          <SectionHeading>Warnings</SectionHeading>
+          <ul className="mt-4 flex flex-col gap-2">
+            {vm.warnings.map((w, i) => (
+              <li
+                key={i}
+                className="flex items-start gap-3 rounded-[12px] border px-4 py-3 text-sm text-ink"
+                style={{ borderColor: "#f0dfa8", backgroundColor: "#fdf6e3" }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#b8860b" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 shrink-0" aria-hidden="true">
+                  <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+                {w}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {/* Stopgap disclaimer. AI-generated model suggestions are heuristic (no
+          model is trained -- CLAUDE.md §9), so they must not be read as
+          professional advice. */}
       <p className="mt-8 text-center text-xs text-muted">
         AI-generated recommendations — not professional advice; verify before use.
       </p>
@@ -770,6 +1110,15 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
   );
 }
 
+function fmt(n: number | undefined): string {
+  if (n === undefined || Number.isNaN(n)) return "—";
+  return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
+function cap(s: string): string {
+  return s.length > 0 ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
 // ------------------------------- data loader --------------------------------
 
 function mapLoadError(err: unknown): string {
@@ -803,18 +1152,14 @@ function ResultsContent() {
 
   useEffect(() => {
     // Marketing preview (no file_id): always show the static mock, and clear
-    // any error/real VM left over from a prior file_id in this session
-    // (Bug 3 -- e.g. /results?file_id=X errored, then user navigates to plain
-    // /results; without clearing, the stale error UI would persist).
+    // any error/real VM left over from a prior file_id in this session.
     if (!fileId) {
       setError(null);
       setVm(MOCK_VM);
       return;
     }
     // New file_id: wipe ALL prior state BEFORE the new response arrives, so no
-    // charts/columns/model data from a previous upload can ever be visible
-    // (Bug 2). vm is a single bundled object rebuilt entirely from the new
-    // response, so nulling it here is a full reset -- nothing is merged.
+    // charts/columns/model data from a previous upload can ever be visible.
     let active = true;
     setVm(null);
     setError(null);
