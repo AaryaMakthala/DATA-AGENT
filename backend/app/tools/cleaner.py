@@ -410,6 +410,21 @@ def clean_csv(
     else:
         applied_plan = _sanitize_plan_for_report(cleaning_plan, target_column)
 
+    # --- Bug #3 diagnostics (DO NOT modify duplicate-removal or cleaning
+    # logic here -- this block is read-only observation, added to trace a
+    # reported inconsistency where the FINAL cleaned_profile (re-profiled
+    # from the saved output of this function) shows a nonzero duplicate
+    # count even after a "drop" duplicates strategy ran, which should be
+    # mathematically impossible. `rows_initial`/`original_duplicates` are
+    # measured on the frame AFTER identifier-column-drop below (not on the
+    # raw upload) because dropping an identifier column, e.g. a unique
+    # PassengerId, can itself change which rows read as duplicates of each
+    # other -- measuring here isolates exactly what `_apply_duplicates`
+    # itself has to work with, separate from the identifier-drop step. See
+    # app/services/report_adapter.py for the complementary diagnostic that
+    # compares this run's numbers against the original upload's profile.
+    rows_initial = len(df)
+
     # Drop identifier columns first (never the target, even if it slipped into
     # the list) and record it in the applied plan so the report shows it.
     dropped = [
@@ -435,18 +450,70 @@ def clean_csv(
         applied_plan["dropped_columns"] = {col: _IDENTIFIER_DROP_REASON for col in dropped}
         logger.info("Cleaner: dropped identifier columns %s", dropped)
 
+    # Bug #3 diagnostics: measure duplicates on the post-identifier-drop frame
+    # -- this is the dataframe `_apply_duplicates` will actually operate on.
+    original_duplicates = int(df.duplicated().sum())
+    logger.info(
+        "Cleaner diagnostics [%s]: rows_initial=%d (post identifier-drop) original_duplicates=%d",
+        file_id, len(df), original_duplicates,
+    )
+
     missing_plan = cleaning_plan.get("missing_values")
     if isinstance(missing_plan, dict):
         df = _apply_missing_values(df, missing_plan, target_column)
     _ensure_not_empty(df, "missing-value handling")
 
+    # Bug #3 diagnostics.
+    rows_after_missing_values = len(df)
+    logger.info(
+        "Cleaner diagnostics [%s]: rows_after_missing_values=%d (removed %d row(s) via missing-value 'drop' strategies)",
+        file_id, rows_after_missing_values, rows_initial - rows_after_missing_values,
+    )
+
+    # Bug #3 diagnostics: len(df) immediately before/after duplicate removal,
+    # as specifically requested -- read-only, no change to _apply_duplicates.
+    rows_before_duplicates = len(df)
     df = _apply_duplicates(df, cleaning_plan.get("duplicates", "keep"))
+    rows_after_duplicates = len(df)
+    rows_removed_by_duplicates = rows_before_duplicates - rows_after_duplicates
+    duplicates_remaining_post_dedup = int(df.duplicated().sum())
+    logger.info(
+        "Cleaner diagnostics [%s]: rows_before_duplicates=%d rows_after_duplicates=%d "
+        "rows_removed_by_duplicates=%d duplicates_remaining_immediately_post_dedup=%d",
+        file_id, rows_before_duplicates, rows_after_duplicates,
+        rows_removed_by_duplicates, duplicates_remaining_post_dedup,
+    )
+    if duplicates_remaining_post_dedup > 0:
+        logger.warning(
+            "Cleaner diagnostics [%s]: %d duplicate row(s) remain IMMEDIATELY after "
+            "drop_duplicates() -- this should be mathematically impossible for an exact-match "
+            "dedup on the same columns. Investigate _apply_duplicates or the dedup strategy "
+            "value received (cleaning_plan.get('duplicates')=%r).",
+            file_id, duplicates_remaining_post_dedup, cleaning_plan.get("duplicates"),
+        )
+    if original_duplicates != rows_removed_by_duplicates + duplicates_remaining_post_dedup:
+        logger.warning(
+            "Cleaner diagnostics [%s]: DUPLICATE COUNT MISMATCH -- original_duplicates=%d but "
+            "rows_removed_by_duplicates(%d) + duplicates_remaining_post_dedup(%d) = %d "
+            "(discrepancy of %d). This is the exact inconsistency reported as Bug #3.",
+            file_id, original_duplicates, rows_removed_by_duplicates, duplicates_remaining_post_dedup,
+            rows_removed_by_duplicates + duplicates_remaining_post_dedup,
+            original_duplicates - (rows_removed_by_duplicates + duplicates_remaining_post_dedup),
+        )
     _ensure_not_empty(df, "duplicate removal")
 
     outliers_plan = cleaning_plan.get("outliers")
+    rows_before_outliers = len(df)
     if isinstance(outliers_plan, dict):
         df = _apply_outliers(df, outliers_plan, target_column)
     _ensure_not_empty(df, "outlier removal")
+
+    # Bug #3 diagnostics.
+    rows_after_outliers = len(df)
+    logger.info(
+        "Cleaner diagnostics [%s]: rows_before_outliers=%d rows_after_outliers=%d rows_removed_by_outliers=%d",
+        file_id, rows_before_outliers, rows_after_outliers, rows_before_outliers - rows_after_outliers,
+    )
 
     # Flag (don't drop) any feature that leaks the target -- surfaced in the
     # report so the user knows to exclude it before modeling.
@@ -476,6 +543,21 @@ def clean_csv(
         df.to_csv(output_path, index=False)
     except OSError as exc:
         raise CleanerError(f"Failed to write cleaned CSV to {output_path}: {exc}") from exc
+
+    # Bug #3 diagnostics: final summary line tying every stage together, plus
+    # what's re-read from the saved file for comparison against
+    # report_adapter.py's diagnostic block at request time.
+    rows_removed_by_other_operations = (
+        (rows_initial - rows_after_missing_values) + (rows_before_outliers - rows_after_outliers)
+    )
+    logger.info(
+        "Cleaner diagnostics [%s] SUMMARY: rows_initial=%d rows_final=%d total_rows_removed=%d | "
+        "original_duplicates=%d rows_removed_by_duplicates=%d duplicates_remaining_post_dedup=%d | "
+        "rows_removed_by_other_operations=%d (missing-value drop + outlier removal)",
+        file_id, rows_initial, len(df), rows_initial - len(df),
+        original_duplicates, rows_removed_by_duplicates, duplicates_remaining_post_dedup,
+        rows_removed_by_other_operations,
+    )
 
     logger.info(
         "Cleaner: saved cleaned CSV to %s (%d rows, %d columns)", output_path.name, df.shape[0], df.shape[1]
