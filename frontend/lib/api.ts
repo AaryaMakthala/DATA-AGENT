@@ -106,3 +106,21 @@ export function resolveAssetUrl(path: string): string {
   const normalized = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
   return `${BASE_URL}${normalized}`;
 }
+
+/**
+ * Build the download URL for the cleaned CSV.
+ *
+ * NOTE: the backend currently exposes exactly ONE download route --
+ * `GET /download/{file_id}`, which returns the cleaned CSV (see
+ * backend/app/api/routes.py's `download_cleaned_csv`). There is no
+ * `/download/<kind>/<file_id>` routing for analysis_report / json_results /
+ * charts_zip / cleaning_log yet -- those download-center buttons render as
+ * "Unavailable" in results/page.tsx until real generator functions +
+ * routes exist for them on the backend. Don't add a multi-kind
+ * `downloadPath()` helper here until that backend work lands; a URL-building
+ * function for routes that don't exist is worse than no function -- it
+ * looks wired up but 404s.
+ */
+export function cleanedCsvDownloadUrl(fileId: string): string {
+  return resolveAssetUrl(`/download/${fileId}`);
+}

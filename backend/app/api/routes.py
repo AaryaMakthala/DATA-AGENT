@@ -19,6 +19,7 @@ from app.services.file_service import (
     resolve_upload_path,
     save_upload,
 )
+from app.services.report_adapter import build_results_response
 from app.tools.cleaner import CleanerError
 from app.tools.ml_recommender import MLRecommenderError
 from app.tools.profiler import ProfilerError
@@ -64,7 +65,13 @@ def _charts_to_urls(chart_paths: list[str] | None) -> list[str] | None:
     return [f"/charts/{Path(p).name}" for p in chart_paths]
 
 
-def _response_payload(file_id: str, data: dict):
+def _response_payload(file_id: str, data: dict) -> dict:
+    """Legacy flat payload -- unchanged, still used as-is by /analyze.
+
+    /results additionally merges `report_adapter.build_results_response`
+    on top of this (see `get_results` below) rather than changing this
+    function's shape, so /analyze's response contract doesn't shift.
+    """
     return dict(
         file_id=file_id,
         profile=data.get("profile"),
@@ -246,9 +253,19 @@ async def get_results(file_id: str) -> ResultsResponse:
             "Stored analysis results are corrupted.",
         ) from exc
 
-    return ResultsResponse(
-        **_response_payload(file_id, data)
-    )
+    payload = _response_payload(file_id, data)
+
+    # Merge the enriched dashboard sections on top of the legacy payload.
+    # `build_results_response` never raises for missing/partial data (it
+    # returns `{}` if there's not enough to work with) -- wrapped in
+    # try/except anyway so a bug in the NEW enrichment code can never take
+    # down the EXISTING /results endpoint the frontend already depends on.
+    try:
+        payload.update(build_results_response(file_id, data))
+    except Exception:
+        logger.exception("Failed to build enriched results sections for file_id=%s", file_id)
+
+    return ResultsResponse(**payload)
 
 
 @router.get("/download/{file_id}")

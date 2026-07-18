@@ -123,7 +123,236 @@ export interface AnalyzeResponse {
   recommendations: Recommendations | null;
 }
 
-export type ResultsResponse = AnalyzeResponse;
+// =============================================================================
+// NEW: §1-§20 dashboard sections, added to ResultsResponse only (matching
+// backend/app/api/schemas.py -- these fields exist on the Pydantic
+// ResultsResponse model, NOT on AnalyzeResponse). That's why ResultsResponse
+// below is no longer `type ResultsResponse = AnalyzeResponse` -- it's its
+// own interface that extends AnalyzeResponse with the extra sections, same
+// relationship as the two Pydantic models on the backend.
+//
+// Shapes here mirror `backend/app/services/report_adapter.py` /
+// `response_builder.py` field-for-field, and match the Zod schema in
+// `frontend/app/results/page.tsx` (which validates the actual HTTP response
+// at runtime -- these interfaces are the compile-time contract, Zod is the
+// runtime one; if they drift, Zod is the one that will actually catch it).
+// =============================================================================
+
+export interface ReadinessBadge {
+  label: string;
+  sublabel: string;
+  score: number;
+}
+
+export interface OverviewSection {
+  dataset_name: string;
+  rows: number;
+  columns: number;
+  memory_usage?: string | null;
+  numeric_features?: number | null;
+  categorical_features?: number | null;
+  detected_target?: string | null;
+  problem_type?: string | null;
+  processing_status?: string | null;
+  processing_time_seconds?: number | null;
+  readiness_badge?: ReadinessBadge | null;
+}
+
+export interface QualityComponentCard {
+  key: string;
+  label: string;
+  score: number;
+  status_color?: "green" | "yellow" | "orange" | "red" | string | null;
+  explanation: string;
+}
+
+export interface QualityDashboard {
+  overall_score: number;
+  status: string;
+  sublabel: string;
+  components: QualityComponentCard[];
+}
+
+export interface DatasetHealth {
+  health: "Excellent" | "Good" | "Fair" | "Poor" | string;
+  score: number;
+  explanation: string;
+}
+
+export interface QualityIssueCard {
+  issue: string;
+  severity: "High" | "Medium" | string;
+  impact: string;
+  recommendation: string;
+}
+
+export interface QualitySection {
+  score: number;
+  components?: Record<string, number>;
+  dashboard?: QualityDashboard | null;
+  health?: DatasetHealth | null;
+  issues: QualityIssueCard[];
+}
+
+export interface ExecutiveSummarySection {
+  overview: string;
+  key_findings: string[];
+  risks: string[];
+  recommendations: string[];
+  source?: "structured" | "fallback_unstructured" | string;
+  note?: string;
+}
+
+export interface InsightCard {
+  icon?: string | null;
+  title: string;
+  value: string;
+  detail: string;
+}
+
+export interface AnalysisSection {
+  executive_summary?: ExecutiveSummarySection | null;
+  dataset_insights: InsightCard[];
+}
+
+export interface TimelineItem {
+  icon?: string;
+  action: string;
+  reason: string;
+  confidence: string;
+}
+
+export interface AIDecisionCard {
+  decision: string;
+  reason: string;
+  confidence: string;
+}
+
+export interface CleaningSummarySection {
+  rows_affected?: number;
+  columns_affected?: string[];
+  columns_affected_count?: number;
+  execution_time_seconds?: number;
+  total_actions?: number;
+  timeline: TimelineItem[];
+  ai_decisions: AIDecisionCard[];
+  /** Present when before/after data wasn't available to compute
+   * rows_affected/columns_affected accurately (see report_adapter.py). */
+  note?: string;
+}
+
+export interface BeforeAfterRow {
+  metric: string;
+  before: number;
+  after: number;
+  difference: string;
+}
+
+export interface BeforeAfterSection {
+  rows_before: number;
+  rows_after: number;
+  duplicates_removed: number;
+  missing_before: number;
+  missing_after: number;
+  outliers_before: number;
+  outliers_after: number;
+  columns_removed: string[];
+  columns_encoded: string[];
+  values_imputed: number;
+  identifier_columns_removed: string[];
+  table: BeforeAfterRow[];
+}
+
+export interface ChartManifestItem {
+  path?: string | null;
+  chart_type?: "bar" | "histogram" | "scatter" | "heatmap" | "chart" | string | null;
+  title: string;
+  description?: string | null;
+  interpretation?: string | null;
+}
+
+export interface VisualizationsSection {
+  charts: ChartManifestItem[];
+}
+
+export interface ModelCard {
+  model_name: string;
+  confidence: string;
+  reason: string;
+  advantages: string[];
+  disadvantages: string[];
+  interpretability?: string | null;
+  training_speed?: string | null;
+  inference_speed?: string | null;
+  handles_missing?: string | null;
+  handles_outliers?: string | null;
+  scalability?: string | null;
+}
+
+export interface WhyNotOtherCard {
+  model: string;
+  explanation: string;
+}
+
+export interface ReadinessDimension {
+  stars: number;
+  display: string;
+}
+
+export interface ReadinessSection {
+  business_intelligence?: ReadinessDimension | null;
+  machine_learning?: ReadinessDimension | null;
+  deep_learning?: ReadinessDimension | null;
+  visualization?: ReadinessDimension | null;
+  deployment?: ReadinessDimension | null;
+}
+
+export interface MLRecommendationSection {
+  problem_type?: string | null;
+  target_column?: string | null;
+  detection_reasoning?: string | null;
+  top_recommendation?: string | null;
+  models: ModelCard[];
+  why_not_others: WhyNotOtherCard[];
+  readiness?: ReadinessSection | null;
+  warnings: string[];
+}
+
+export interface DownloadsSection {
+  cleaned_csv?: string | null;
+  analysis_report?: string | null;
+  json_results?: string | null;
+  charts_zip?: string | null;
+  cleaning_log?: string | null;
+}
+
+export interface MetadataSection {
+  row_count?: number | null;
+  column_count?: number | null;
+  processing_metrics?: Record<string, number>;
+}
+
+/**
+ * `ResultsResponse` was previously `type ResultsResponse = AnalyzeResponse`.
+ * On the backend, `ResultsResponse` (schemas.py) has 9 additional optional
+ * fields that `AnalyzeResponse` does NOT have -- so an alias was actually
+ * incorrect (it let TypeScript believe `AnalyzeResponse` also carries these
+ * fields, which it doesn't; `/analyze/{file_id}`'s response never includes
+ * them, only `/results/{file_id}`'s does). This now matches that real
+ * asymmetry: an interface that extends AnalyzeResponse with the extra
+ * sections, same relationship as the two Pydantic models.
+ */
+export interface ResultsResponse extends AnalyzeResponse {
+  overview?: OverviewSection | null;
+  quality?: QualitySection | null;
+  analysis?: AnalysisSection | null;
+  cleaning_summary?: CleaningSummarySection | null;
+  before_after?: BeforeAfterSection | null;
+  visualizations?: VisualizationsSection | null;
+  ml_recommendation?: MLRecommendationSection | null;
+  downloads?: DownloadsSection | null;
+  metadata?: MetadataSection | null;
+}
 
 export interface ApiErrorPayload {
   detail: string;
