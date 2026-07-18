@@ -136,6 +136,32 @@ def resolve_cleaned_file_path(file_id: str) -> Path:
     return path
 
 
+def chart_path_to_url(path: str) -> str:
+    """
+    Convert an absolute chart filesystem path (as returned by
+    `app.tools.visualizer.generate_charts`, e.g.
+    `/srv/app/outputs/charts/abc123_bar_Sex.png`) to its public `/charts/`
+    URL (e.g. `/charts/abc123_bar_Sex.png`).
+
+    NEW: single shared implementation. Previously `routes.py`'s
+    `_charts_to_urls` and `report_adapter.py`'s chart-manifest builder each
+    needed this exact conversion but only one of them actually had it --
+    `report_adapter.py` was passing the raw filesystem path straight through
+    to the frontend, which `safeResolveAssetUrl()` correctly rejected (it
+    doesn't match the `/charts/` prefix allowlist), so chart titles rendered
+    but the `<img>` never did. Putting the conversion here, once, and having
+    both callers import it, makes that specific class of bug structurally
+    impossible to reintroduce.
+
+    Assumes chart files are served from a directory matching
+    `Config.CHARTS_FOLDER` mounted at the `/charts` URL path (see main.py --
+    verify a `StaticFiles(directory=str(Config.CHARTS_FOLDER))` mount exists
+    at `/charts`; this function only builds the URL, it doesn't serve the
+    file).
+    """
+    return f"/charts/{Path(path).name}"
+
+
 def purge_expired_artifacts() -> int:
     """
     Delete expired artifacts.

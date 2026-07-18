@@ -1,10 +1,12 @@
-"""FastAPI routes: /upload, /analyze/{file_id}, /results/{file_id}, /download/{file_id}."""
+"""FastAPI routes: /upload, /analyze/{file_id}, /results/{file_id}, /download/{file_id}, /download/charts/{file_id}."""
 
+import io
 import json
-from pathlib import Path
+import zipfile
+from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.agents.graph import build_graph
 from app.agents.llm_router import LLMRouterError
@@ -14,6 +16,7 @@ from app.services.csv_service import CSVServiceError, validate_and_preview
 from app.services.file_service import (
     FileServiceError,
     UploadTooLargeError,
+    chart_path_to_url,
     resolve_cleaned_file_path,
     resolve_report_path,
     resolve_upload_path,
@@ -59,14 +62,58 @@ def _enforce_rate_limit(request: Request, bucket: str, max_requests: int) -> Non
         ) from exc
 
 
-def _charts_to_urls(chart_paths: list[str] | None) -> list[str] | None:
-    if chart_paths is None:
+def _charts_to_urls(charts: list[dict[str, Any]] | list[str] | None) -> list[str] | None:
+    """Extract just the URLs from the stored chart metadata, for the legacy
+    `charts: list[str]` field on AnalyzeResponse/ResultsResponse.
+
+    Accepts either the current shape (list of metadata dicts with a `path`
+    key, from visualizer.generate_charts) or the old bare-path-string shape,
+    so a report JSON written before this change still loads without error.
+    """
+    if charts is None:
         return None
-    return [f"/charts/{Path(p).name}" for p in chart_paths]
+    urls: list[str] = []
+    for item in charts:
+        if isinstance(item, dict):
+            path = item.get("path")
+            if path:
+                urls.append(chart_path_to_url(path))
+        elif isinstance(item, str):
+            urls.append(chart_path_to_url(item))
+    return urls
+
+
+def _report_as_text(report: Any) -> str | None:
+    """Coerce the analysis report to plain text for the legacy `report` field.
+
+    `report` is now `dict | str | None` in the stored state (see graph.py's
+    `_run_analysis_llm` -- it parses structured JSON when the LLM returns
+    it, falling back to a plain string). The legacy `report: str | None`
+    field on AnalyzeResponse/ResultsResponse must stay a string for backward
+    compatibility, so a structured dict gets flattened into one paragraph
+    here. The FULL structured version is still available to callers via
+    `report_adapter.build_results_response`'s `analysis.executive_summary`
+    section -- this flattening only affects the legacy field.
+    """
+    if report is None:
+        return None
+    if isinstance(report, str):
+        return report
+    if isinstance(report, dict):
+        parts: list[str] = []
+        overview = report.get("overview")
+        if overview:
+            parts.append(str(overview))
+        for key in ("key_findings", "risks", "recommendations"):
+            values = report.get(key)
+            if isinstance(values, list):
+                parts.extend(str(v) for v in values)
+        return " ".join(parts) if parts else None
+    return str(report)
 
 
 def _response_payload(file_id: str, data: dict) -> dict:
-    """Legacy flat payload -- unchanged, still used as-is by /analyze.
+    """Legacy flat payload -- shape unchanged, still used as-is by /analyze.
 
     /results additionally merges `report_adapter.build_results_response`
     on top of this (see `get_results` below) rather than changing this
@@ -75,8 +122,9 @@ def _response_payload(file_id: str, data: dict) -> dict:
     return dict(
         file_id=file_id,
         profile=data.get("profile"),
+        cleaned_profile=data.get("cleaned_profile"),
         data_validity=data.get("data_validity"),
-        report=data.get("report"),
+        report=_report_as_text(data.get("report")),
         cleaning_plan=data.get("cleaning_plan"),
         cleaned_file=f"/download/{file_id}"
         if data.get("cleaned_file")
@@ -279,4 +327,36 @@ async def download_cleaned_csv(file_id: str) -> FileResponse:
         path,
         media_type="text/csv",
         filename=f"{file_id}_cleaned.csv",
+    )
+
+
+@router.get("/download/charts/{file_id}")
+async def download_charts_zip(file_id: str) -> StreamingResponse:
+    """Zip every generated chart for this file_id and return it as a download.
+
+    Charts live in `Config.CHARTS_FOLDER`, named `{file_id}_<kind>_<...>.png`
+    by visualizer.py (e.g. `{file_id}_bar_Sex.png`,
+    `{file_id}_correlation_heatmap.png`) -- globbing on that prefix is the
+    same convention `_chart_path_to_url` above already relies on the
+    filename (not the full path) for, so this stays consistent with how
+    chart files are located everywhere else in the app.
+    """
+    chart_paths = sorted(Config.CHARTS_FOLDER.glob(f"{file_id}_*.png"))
+    if not chart_paths:
+        raise APIError(
+            404,
+            "NOT_FOUND",
+            f"No charts found for file_id='{file_id}'. Run /analyze first.",
+        )
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in chart_paths:
+            archive.write(path, arcname=path.name)
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{file_id}_charts.zip"'},
     )

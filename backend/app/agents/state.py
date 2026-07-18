@@ -25,7 +25,17 @@ class AnalystState(TypedDict, total=False):
     cleaning_plan: Any
     cleaned_file: Optional[str]
     viz_file: Optional[str]
-    charts: Optional[list[str]]
-    report: Optional[str]
+    charts: Optional[list[dict[str, Any]]]
+    report: Any
     recommendations: Optional[Any]
     quality_score: Optional[dict[str, Any]]
+
+    # NEW: the post-cleaning profile, re-profiled by `ml_recommendation_node`
+    # from the cleaned CSV. `profile` (above) is set once by `profiler_node`
+    # and always holds the ORIGINAL pre-cleaning profile -- nothing ever
+    # overwrites it. Before this field existed, `ml_recommendation_node`
+    # computed a cleaned profile purely as a local variable and never
+    # returned it into state, so it was lost the moment the node finished --
+    # meaning real before/after cleaning comparisons were impossible from
+    # the stored report. This field is what unlocks that.
+    cleaned_profile: Optional[dict[str, Any]]

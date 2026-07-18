@@ -33,6 +33,20 @@ and charts with another, silently breaking the file_id contract the frontend
 relies on to associate outputs from the same run. Generating it once, in the
 first node, and threading it through state like every other derived field,
 removes that class of bug entirely.
+
+CHANGED (this revision):
+  - `_run_analysis_llm` now parses the analysis LLM's response as JSON
+    (structured {overview, key_findings, risks, recommendations} --
+    see prompts/analysis_prompt.py), the same way `_run_cleaning_plan_llm`
+    already parses the cleaning plan. Falls back to the raw string if the
+    model didn't return valid JSON, so `state["report"]` is `dict | str`
+    rather than always `str` -- `app/services/executive_summary.py`'s
+    `format_executive_summary` already handles both.
+  - `ml_recommendation_node` now returns `cleaned_profile` (the profile it
+    already computes locally by re-profiling the cleaned file) into state,
+    instead of discarding it once the node returns. `state["profile"]`
+    remains the ORIGINAL pre-cleaning profile as before -- this adds the
+    missing second half of the pair, it doesn't change what `profile` means.
 """
 
 import concurrent.futures
@@ -152,11 +166,24 @@ def _route_after_validation(state: AnalystState) -> str:
     return "valid"
 
 
-def _run_analysis_llm(profile: dict) -> str:
-    """Worker: get the plain-text analysis/report from the LLM. Runs in a thread."""
+def _run_analysis_llm(profile: dict) -> dict | str:
+    """Worker: get the structured analysis from the LLM. Runs in a thread.
+
+    Parses the response as JSON (the {overview, key_findings, risks,
+    recommendations} shape from prompts/analysis_prompt.py) the same way
+    `_run_cleaning_plan_llm` parses the cleaning plan below. Falls back to
+    the raw string -- not a `{"raw_plan": ...}` wrapper -- if the model
+    didn't return valid JSON, since `format_executive_summary` treats a
+    plain string as its own valid (if less structured) input.
+    """
     prompt = build_analysis_prompt(profile)
     with log_duration(logger, "llm_analysis.generate (LLM call)"):
-        return _router.generate(prompt)
+        raw = _router.generate(prompt)
+    try:
+        return json.loads(_extract_json_object(raw))
+    except json.JSONDecodeError:
+        logger.warning("Graph: analysis response was not valid JSON; storing raw text instead")
+        return raw
 
 
 def _run_cleaning_plan_llm(profile: dict) -> dict:
@@ -273,6 +300,11 @@ def visualization_node(state: AnalystState) -> dict:
     Uses `state["file_id"]` (set once by `profiler_node`) so chart filenames
     share the same ID as the cleaned/viz files from `python_cleaning_node`
     instead of a separately-generated fallback UUID.
+
+    `generate_charts` now returns a list of metadata dicts (path/chart_type/
+    title/description/interpretation) instead of bare path strings -- this
+    node's contract doesn't change, it still just forwards whatever
+    `generate_charts` returns into `state["charts"]`.
     """
     logger.info("Graph: running visualization node")
     file_id = state["file_id"]
@@ -300,6 +332,11 @@ def ml_recommendation_node(state: AnalystState) -> dict:
     encoded file. That re-derivation was the Known Bugs Issue 2 bug (an
     encoded dummy column like 'Department_Marketing' getting picked as the
     target).
+
+    Now also returns `cleaned_profile` into state (previously this was a
+    local variable, discarded once the node returned) -- this is what lets
+    `report_adapter.py` compute real before/after cleaning comparisons
+    instead of omitting that section entirely.
     """
     logger.info("Graph: running ML recommendation node")
     try:
@@ -327,7 +364,11 @@ def ml_recommendation_node(state: AnalystState) -> dict:
             recommendations.get("problem_type"),
             state.get("identifier_columns"),
         )
-    return {"recommendations": recommendations, "quality_score": quality}
+    return {
+        "recommendations": recommendations,
+        "quality_score": quality,
+        "cleaned_profile": cleaned_profile,
+    }
 
 
 def build_graph():

@@ -30,6 +30,10 @@ class AnalyzeResponse(BaseModel):
     status: str
 
     profile: dict[str, Any] | None = None
+    # NEW: the post-cleaning profile (see agents/state.py's `cleaned_profile`
+    # field and agents/graph.py's `ml_recommendation_node`). `profile` above
+    # is always the ORIGINAL pre-cleaning profile; this is its counterpart.
+    cleaned_profile: dict[str, Any] | None = None
     data_validity: DataValidity | None = None
     quality_score: QualityScore | None = None
     report: str | None = None
@@ -43,6 +47,7 @@ class ResultsResponse(BaseModel):
     file_id: str
 
     profile: dict[str, Any] | None = None
+    cleaned_profile: dict[str, Any] | None = None
     data_validity: DataValidity | None = None
     quality_score: QualityScore | None = None
     report: str | None = None
@@ -51,12 +56,13 @@ class ResultsResponse(BaseModel):
     charts: list[str] | None = None
     recommendations: Any | None = None
 
-    # --- NEW: enriched dashboard sections (redesign brief §1-§20) ---
+    # --- enriched dashboard sections (redesign brief §1-§20) ---
     # Typed loosely as `dict[str, Any] | None` rather than fully-nested
     # Pydantic submodels on purpose: the shape of each section is already
     # defined once, precisely, in app/services/response_builder.py and
     # app/services/report_adapter.py (which is the single source of truth
-    # for what these dicts contain) and again in the frontend's Zod schema
+    # for what these dicts contain) and again in the frontend's TypeScript
+    # interfaces (frontend/types/analysis.ts) and Zod schema
     # (frontend/app/results/page.tsx). Duplicating that shape a third time
     # here as strict Pydantic models would just be one more place to keep in
     # sync -- `dict[str, Any]` lets those two ends stay authoritative while

@@ -6,6 +6,15 @@ chart generation:
 - Numerical column -> histogram
 - Two numerical columns -> scatter plot (for the most correlated pairs)
 - Correlation matrix -> heatmap
+
+CHANGED: every chart-producing helper now returns a metadata dict
+(`{path, chart_type, title, description, interpretation}`) instead of a bare
+path string, so the frontend can render a real title/description/
+interpretation per chart (redesign brief §13) instead of the app guessing
+titles from filenames after the fact. `path` remains the absolute filesystem
+path exactly as before -- callers (routes.py, report_adapter.py) are
+responsible for converting it to a `/charts/<filename>` URL, same as they
+always were; this file still knows nothing about HTTP routing.
 """
 
 import matplotlib
@@ -14,6 +23,7 @@ matplotlib.use("Agg")  # noqa: E402 -- must run before importing pyplot; no disp
 
 import itertools
 from pathlib import Path
+from typing import Any, Optional
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -39,7 +49,7 @@ class VisualizerError(Exception):
     """Raised when charts cannot be generated for a dataset."""
 
 
-def _bar_chart(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> str | None:
+def _bar_chart(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> Optional[dict[str, Any]]:
     """Bar chart of value frequencies for a categorical column."""
     counts = df[column].value_counts(dropna=True)
     if counts.empty:
@@ -62,10 +72,21 @@ def _bar_chart(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> st
     path = out_dir / f"{file_id}_bar_{_safe_name(column)}.png"
     fig.savefig(path)
     plt.close(fig)
-    return str(path)
+
+    top_value = str(counts.index[0])
+    top_count = int(counts.iloc[0])
+    top_share = top_count / int(counts.sum()) * 100 if counts.sum() else 0.0
+
+    return {
+        "path": str(path),
+        "chart_type": "bar",
+        "title": f"Frequency of '{column}'",
+        "description": f"Count of each category in '{column}' ({int(counts.shape[0])} categories shown).",
+        "interpretation": f"'{top_value}' is the most common value, appearing {top_count} times ({top_share:.1f}% of rows).",
+    }
 
 
-def _histogram(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> str | None:
+def _histogram(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> Optional[dict[str, Any]]:
     """Histogram of a numerical column's distribution."""
     series = df[column].dropna()
     if series.empty:
@@ -73,6 +94,7 @@ def _histogram(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> st
 
     # Detect skew: |mean - median| / std
     use_log = False
+    skew_measure = None
     if series.std() > 0:
         skew_measure = abs(series.mean() - series.median()) / series.std()
         if skew_measure > _SKEW_THRESHOLD:
@@ -92,10 +114,24 @@ def _histogram(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> st
     path = out_dir / f"{file_id}_hist_{_safe_name(column)}.png"
     fig.savefig(path)
     plt.close(fig)
-    return str(path)
+
+    if use_log:
+        interpretation = f"'{column}' is right-skewed (skew measure {skew_measure:.2f}), so this is shown on a log scale."
+    elif skew_measure is not None:
+        interpretation = f"'{column}' is roughly symmetric (skew measure {skew_measure:.2f})."
+    else:
+        interpretation = f"'{column}' has zero variance in the non-null values shown."
+
+    return {
+        "path": str(path),
+        "chart_type": "histogram",
+        "title": f"Distribution of '{column}'",
+        "description": f"Distribution of '{column}' across all rows with a non-null value.",
+        "interpretation": interpretation,
+    }
 
 
-def _scatter_plot(df: pd.DataFrame, col_x: str, col_y: str, out_dir: Path, file_id: str) -> str | None:
+def _scatter_plot(df: pd.DataFrame, col_x: str, col_y: str, out_dir: Path, file_id: str) -> Optional[dict[str, Any]]:
     """Scatter plot between two numerical columns."""
     pair_df = df[[col_x, col_y]].dropna()
     if pair_df.empty:
@@ -109,10 +145,25 @@ def _scatter_plot(df: pd.DataFrame, col_x: str, col_y: str, out_dir: Path, file_
     path = out_dir / f"{file_id}_scatter_{_safe_name(col_x)}_{_safe_name(col_y)}.png"
     fig.savefig(path)
     plt.close(fig)
-    return str(path)
+
+    corr = pair_df[col_x].corr(pair_df[col_y])
+    if pd.isna(corr):
+        interpretation = f"Correlation between '{col_x}' and '{col_y}' could not be computed."
+    else:
+        strength = "strong" if abs(corr) > 0.5 else "moderate" if abs(corr) > 0.25 else "weak"
+        direction = "positive" if corr > 0 else "negative"
+        interpretation = f"A {strength} {direction} relationship (correlation {corr:.2f})."
+
+    return {
+        "path": str(path),
+        "chart_type": "scatter",
+        "title": f"'{col_x}' vs '{col_y}'",
+        "description": f"Relationship between '{col_x}' and '{col_y}', the numeric pair with one of the strongest correlations in this dataset.",
+        "interpretation": interpretation,
+    }
 
 
-def _correlation_heatmap(df: pd.DataFrame, numeric_cols: list[str], out_dir: Path, file_id: str) -> str | None:
+def _correlation_heatmap(df: pd.DataFrame, numeric_cols: list[str], out_dir: Path, file_id: str) -> Optional[dict[str, Any]]:
     """Heatmap of the pairwise correlation matrix for numeric columns."""
     if len(numeric_cols) < 2:
         return None
@@ -144,7 +195,27 @@ def _correlation_heatmap(df: pd.DataFrame, numeric_cols: list[str], out_dir: Pat
     path = out_dir / f"{file_id}_correlation_heatmap.png"
     fig.savefig(path)
     plt.close(fig)
-    return str(path)
+
+    # Find the strongest off-diagonal pair for the interpretation string.
+    best_pair, best_value = None, 0.0
+    for i, a in enumerate(filtered_cols):
+        for b in filtered_cols[i + 1:]:
+            value = corr.loc[a, b]
+            if pd.notna(value) and abs(value) > abs(best_value):
+                best_value, best_pair = value, (a, b)
+
+    if best_pair:
+        interpretation = f"The strongest relationship is between '{best_pair[0]}' and '{best_pair[1]}' (correlation {best_value:.2f})."
+    else:
+        interpretation = "No strong pairwise correlations were found among these columns."
+
+    return {
+        "path": str(path),
+        "chart_type": "heatmap",
+        "title": "Correlation Matrix",
+        "description": f"Pairwise correlation across {len(filtered_cols)} numeric columns.",
+        "interpretation": interpretation,
+    }
 
 
 def _safe_name(column: str) -> str:
@@ -166,7 +237,7 @@ def _top_correlated_pairs(df: pd.DataFrame, numeric_cols: list[str], limit: int)
     return [(a, b) for a, b, _ in pairs[:limit]]
 
 
-def generate_charts(file_path: str, file_id: str) -> list[str]:
+def generate_charts(file_path: str, file_id: str) -> list[dict[str, Any]]:
     """Generate all charts for a (cleaned) dataset and save them to outputs/charts/.
 
     Args:
@@ -175,7 +246,12 @@ def generate_charts(file_path: str, file_id: str) -> list[str]:
         file_id: Identifier used to name and namespace output chart files.
 
     Returns:
-        A list of absolute paths (as strings) to the generated PNG chart files.
+        A list of chart metadata dicts, each:
+        `{"path": str, "chart_type": str, "title": str, "description": str,
+        "interpretation": str}`. `path` is an absolute filesystem path (same
+        as this function always returned before -- callers convert it to a
+        `/charts/<filename>` URL, this function still knows nothing about
+        HTTP routing).
 
     Raises:
         VisualizerError: if the CSV cannot be loaded.
@@ -204,26 +280,26 @@ def generate_charts(file_path: str, file_id: str) -> list[str]:
             continuous_numeric_cols.append(col)
 
     out_dir = Config.CHARTS_FOLDER
-    chart_paths: list[str] = []
+    charts: list[dict[str, Any]] = []
 
     for column in categorical_cols[:_MAX_BAR_CHARTS]:
-        path = _bar_chart(df, column, out_dir, file_id)
-        if path:
-            chart_paths.append(path)
+        chart = _bar_chart(df, column, out_dir, file_id)
+        if chart:
+            charts.append(chart)
 
     for column in continuous_numeric_cols[:_MAX_HISTOGRAMS]:
-        path = _histogram(df, column, out_dir, file_id)
-        if path:
-            chart_paths.append(path)
+        chart = _histogram(df, column, out_dir, file_id)
+        if chart:
+            charts.append(chart)
 
     for col_x, col_y in _top_correlated_pairs(df, continuous_numeric_cols, _MAX_SCATTER_PAIRS):
-        path = _scatter_plot(df, col_x, col_y, out_dir, file_id)
-        if path:
-            chart_paths.append(path)
+        chart = _scatter_plot(df, col_x, col_y, out_dir, file_id)
+        if chart:
+            charts.append(chart)
 
-    heatmap_path = _correlation_heatmap(df, continuous_numeric_cols, out_dir, file_id)
-    if heatmap_path:
-        chart_paths.append(heatmap_path)
+    heatmap = _correlation_heatmap(df, continuous_numeric_cols, out_dir, file_id)
+    if heatmap:
+        charts.append(heatmap)
 
-    logger.info("Visualizer: generated %d chart(s) for file_id=%s", len(chart_paths), file_id)
-    return chart_paths
+    logger.info("Visualizer: generated %d chart(s) for file_id=%s", len(charts), file_id)
+    return charts
