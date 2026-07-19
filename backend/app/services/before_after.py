@@ -1,11 +1,12 @@
 """Before-vs-after cleaning comparison (redesign brief §5).
 
 Purely arithmetic over two profiles that already exist by the time this runs:
-`ctx.profile` (original file, profiled once in pipeline_context.build_context)
-and `ctx.cleaned_profile` (cleaned file, profiled once in
-pipeline_context.attach_cleaned_profile). No new profiling happens here --
-this module only diffs two dicts, which is also why it can't reintroduce the
-stale-profile bug: it has no file path, only the two profile dicts.
+`ctx.profile` (the original file's profile) and `ctx.cleaned_profile` (the
+cleaned file's profile). Both are set on the `before_ctx` instance that
+`report_adapter.build_results_response` constructs. No new profiling happens
+here -- this module only diffs two dicts, which is also why it can't
+reintroduce a stale-profile bug: it has no file path, only the two profile
+dicts.
 """
 
 from typing import Any, Optional
@@ -18,8 +19,8 @@ def compute_before_after(ctx: PipelineContext, applied_plan: dict[str, Any]) -> 
 
     Args:
         ctx: Pipeline context with both `profile` and `cleaned_profile` set.
-            Raises if `cleaned_profile` is missing -- this must run after
-            `attach_cleaned_profile`.
+            Raises if `cleaned_profile` is missing -- callers must set it
+            (report_adapter builds a dedicated `before_ctx` for this).
         applied_plan: The `applied_plan` dict returned by `cleaner.clean_csv`
             (used to count columns_encoded / values_imputed / dropped
             identifier columns -- these aren't derivable from the profile

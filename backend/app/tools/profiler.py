@@ -44,14 +44,109 @@ _RAGGED_RATIO_THRESHOLD = 2
 # triggers this.
 _RAGGED_MIN_ABSOLUTE_DIFF = 2
 
+# --- ROOT CAUSE FIX (large-dataset upload rejection) ----------------------
+# Some real-world CSVs (e.g. files exported from "sample data" generators)
+# ship with a single free-text banner/comment line ABOVE the real header,
+# e.g.:
+#   # This sample CSV file is provided by Sample-Files.com...
+#   ID,Name,Age,...
+#   1,Name_1,22,...
+# Previously, _detect_ragged_columns correctly *detected* this (the "real"
+# header + every data row have N fields, but row 0 -- the banner -- has 1)
+# and raised ProfilerError, which is safe but forces the user to manually
+# edit the file. Since this exact shape (one preamble line, everything below
+# it uniformly N-wide) is unambiguous and mechanically repairable, we now
+# attempt ONE auto-repair pass: drop the leading line and re-parse. If the
+# re-parsed frame's column count then matches what the data rows actually
+# contain, we proceed with a warning instead of failing the upload. If it
+# does NOT resolve cleanly (e.g. genuinely corrupt/ragged data), we fall back
+# to raising the original, unmodified ProfilerError -- no silent corruption.
+_MAX_PREAMBLE_LINES_TO_STRIP = 1
+
 
 class ProfilerError(Exception):
     """Raised when a CSV cannot be read or profiled, with a clear reason."""
 
 
-def _detect_ragged_columns(file_path: Path, df: pd.DataFrame) -> None:
+def _log_df_state(stage: str, df: pd.DataFrame) -> None:
+    """TEMPORARY diagnostic hook: log shape/columns/dtypes/dup-count at a pipeline stage.
+
+    Added per debugging request to trace Bug #3 (duplicate-count mismatch)
+    and the large-file ragged-header rejection. Safe to remove once both are
+    confirmed fixed in production; left in as INFO-level so it's cheap and
+    non-intrusive if kept.
+    """
+    logger.info(
+        "DIAG[%s]: shape=%s dtypes=%s duplicated_sum=%d",
+        stage, df.shape, dict(df.dtypes.astype(str)), int(df.duplicated().sum()),
+    )
+
+
+def _sample_field_counts(file_path: Path, skip_lines: int = 0) -> list[int]:
+    """Read raw field counts for up to _RAGGED_SAMPLE_ROWS lines, after skipping `skip_lines`."""
+    with file_path.open("r", encoding="utf-8", errors="replace", newline="") as f:
+        reader = csv.reader(f)
+        for _ in range(skip_lines):
+            try:
+                next(reader)
+            except StopIteration:
+                return []
+        counts = []
+        for _ in range(_RAGGED_SAMPLE_ROWS + 1):  # +1 header row
+            try:
+                row = next(reader)
+            except StopIteration:
+                break
+            if row:
+                counts.append(len(row))
+        return counts
+
+
+def _try_strip_leading_preamble(file_path: Path, header_fields: int, typical_fields: int) -> pd.DataFrame | None:
+    """Attempt to auto-repair a single stray preamble line above the real header.
+
+    Only fires for the narrow, unambiguous case this whole function exists to
+    handle: the header pandas parsed has `header_fields` columns (usually 1,
+    from a free-text banner line), and skipping exactly one more line yields a
+    NEW header + all following data rows that agree on `typical_fields`
+    columns. Returns the re-parsed DataFrame on success, or None if skipping a
+    line doesn't resolve the mismatch (caller should then raise the original
+    ProfilerError rather than guess further).
+    """
+    if header_fields != 1:
+        # Only handle the classic "single free-text banner line" shape. A
+        # multi-column-but-still-wrong header is a different failure mode we
+        # don't want to guess about.
+        return None
+
+    for skip in range(1, _MAX_PREAMBLE_LINES_TO_STRIP + 1):
+        counts_after_skip = _sample_field_counts(file_path, skip_lines=skip)
+        if not counts_after_skip:
+            continue
+        new_header_fields = counts_after_skip[0]
+        data_counts = counts_after_skip[1:]
+        if not data_counts:
+            continue
+        if new_header_fields == typical_fields and all(c == typical_fields for c in data_counts):
+            try:
+                df = pd.read_csv(file_path, skiprows=skip, low_memory=False)
+            except Exception:  # noqa: BLE001 -- any failure here just means "repair didn't work"
+                return None
+            if df.shape[1] == typical_fields:
+                logger.warning(
+                    "%s: auto-repaired by skipping %d leading non-data line(s) above the header "
+                    "(detected banner/comment text, not tabular data)",
+                    file_path.name, skip,
+                )
+                return df
+    return None
+
+
+def _detect_ragged_columns(file_path: Path, df: pd.DataFrame) -> pd.DataFrame:
     """Detect a header/data column-count mismatch pandas silently 'resolved'
-    instead of raising, and fail loudly with an actionable message instead.
+    instead of raising, and fail loudly with an actionable message instead --
+    unless the mismatch is auto-repairable (see _try_strip_leading_preamble),
+    in which case the repaired DataFrame is returned.
 
     BACKGROUND: `pd.read_csv` treats row 0 as the header by default. If a
     stray non-data line precedes the real header (e.g. a comment/banner
@@ -80,9 +175,15 @@ def _detect_ragged_columns(file_path: Path, df: pd.DataFrame) -> None:
     `_RAGGED_MIN_ABSOLUTE_DIFF` fields off raises, since that combination
     is not explainable by the normal index-column convention.
 
+    Returns:
+        The original `df`, or an auto-repaired DataFrame if a single
+        leading preamble line was the cause and stripping it resolves the
+        mismatch cleanly.
+
     Raises:
         ProfilerError: if the sampled data rows consistently have far more
-            fields than the parsed header implies.
+            fields than the parsed header implies, AND auto-repair did not
+            resolve it.
     """
     try:
         with file_path.open("r", encoding="utf-8", errors="replace", newline="") as f:
@@ -90,7 +191,7 @@ def _detect_ragged_columns(file_path: Path, df: pd.DataFrame) -> None:
             try:
                 next(reader)  # the header row, as pandas saw it
             except StopIteration:
-                return
+                return df
             sample_field_counts = []
             for _ in range(_RAGGED_SAMPLE_ROWS):
                 try:
@@ -103,10 +204,10 @@ def _detect_ragged_columns(file_path: Path, df: pd.DataFrame) -> None:
         # If we can't even re-open the file for sampling, don't block the
         # main read on this best-effort check -- the primary parse already
         # succeeded, and other error paths already handle unreadable files.
-        return
+        return df
 
     if not sample_field_counts:
-        return
+        return df
 
     typical_fields = Counter(sample_field_counts).most_common(1)[0][0]
     header_fields = df.shape[1]
@@ -114,6 +215,9 @@ def _detect_ragged_columns(file_path: Path, df: pd.DataFrame) -> None:
         typical_fields > header_fields * _RAGGED_RATIO_THRESHOLD
         and typical_fields - header_fields >= _RAGGED_MIN_ABSOLUTE_DIFF
     ):
+        repaired = _try_strip_leading_preamble(file_path, header_fields, typical_fields)
+        if repaired is not None:
+            return repaired
         raise ProfilerError(
             f"{file_path.name} looks malformed: the header implies {header_fields} "
             f"column(s), but data rows consistently have {typical_fields} comma-"
@@ -121,6 +225,7 @@ def _detect_ragged_columns(file_path: Path, df: pd.DataFrame) -> None:
             "comment or banner) before the real header row. Please remove any "
             "non-data lines before the header and re-upload."
         )
+    return df
 
 
 def _read_csv_with_fallback(file_path: Path) -> pd.DataFrame:
@@ -148,7 +253,13 @@ def _read_csv_with_fallback(file_path: Path) -> pd.DataFrame:
     last_error: Exception | None = None
     for encoding in ("utf-8", "latin-1"):
         try:
-            df = pd.read_csv(file_path, encoding=encoding)
+            # low_memory=False: without it, pandas can throw an internal
+            # IndexError (not a catchable ParserError) when a DtypeWarning
+            # for mixed-type columns coincides with a column-count mismatch
+            # -- observed directly while reproducing the ragged-header case
+            # on a real uploaded file. low_memory=False reads the whole file
+            # in one pass instead of chunking, avoiding that code path.
+            df = pd.read_csv(file_path, encoding=encoding, low_memory=False)
             if encoding != "utf-8":
                 logger.warning("File %s is not UTF-8; parsed successfully with latin-1 fallback", file_path.name)
             break
@@ -168,15 +279,20 @@ def _read_csv_with_fallback(file_path: Path) -> pd.DataFrame:
     if df.shape[1] == 0:
         raise ProfilerError(f"CSV file has no columns to parse: {file_path.name}")
 
+    _log_df_state("after CSV load (pre ragged-check)", df)
+
     # Catches the specific silent-corruption case where pandas' column count
     # doesn't match what the data rows actually contain (see
     # _detect_ragged_columns's docstring) -- must run before
     # _fix_missing_header_if_needed, which has a narrower, different purpose
-    # (an all-numeric header) and would not catch this.
-    _detect_ragged_columns(file_path, df)
+    # (an all-numeric header) and would not catch this. May return an
+    # auto-repaired (preamble-stripped) DataFrame instead of `df`.
+    df = _detect_ragged_columns(file_path, df)
+    _log_df_state("after ragged-column check/repair", df)
 
     _enforce_size_limits(df, file_path)
     df = _fix_missing_header_if_needed(df, file_path)
+    _log_df_state("after missing-header repair", df)
     return df
 
 

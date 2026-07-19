@@ -87,7 +87,13 @@ Missing Values
 - Include ONLY columns that contain missing values.
 - Numeric columns -> "median"
 - Categorical columns -> "mode"
-- Recommend "drop" only when missing values are extremely high.
+- Prefer imputation. Recommend "drop" ONLY for columns with a small amount
+  of missing data. Do NOT choose "drop" to preserve a column that is missing
+  a large share of its values: deleting most of the rows to keep one sparse
+  column is almost always the wrong trade. (As a safeguard, the Python
+  cleaner will convert a "drop" that would remove a large fraction of the
+  rows into dropping that COLUMN instead of the rows -- so choosing "drop"
+  for a high-missingness column drops the column, not the dataset.)
 
 Duplicates
 

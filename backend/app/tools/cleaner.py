@@ -41,6 +41,26 @@ _LEAKAGE_CORRELATION_THRESHOLD = 0.99
 # Known Bugs, Issue 9).
 _MIN_ROWS_FOR_OUTLIER_ACTION = 30
 
+# Safeguard against row-collapsing missing-value "drop" strategies (CLAUDE.md
+# Known Bugs, Issue 6). The LLM's cleaning prompt is allowed to choose "drop"
+# for a column, and does so for very-high-missingness columns -- e.g. Titanic
+# 'Cabin' is 77% missing, and dropping every row with a missing Cabin deletes
+# 687 of 891 rows to preserve one column. That is almost always the wrong
+# trade: you throw away most of the dataset to keep a mostly-empty feature.
+# When a "drop" strategy would remove MORE than this fraction of the rows
+# currently in hand, we drop the COLUMN instead of the rows -- preserving the
+# sample size, which matters far more to every downstream model than one
+# sparse feature. Below the threshold, "drop" still drops rows as planned.
+_MAX_ROW_DROP_FRACTION_FOR_MISSING = 0.10
+
+# Reason surfaced in the applied plan when the safeguard above converts a
+# row-drop into a column-drop, so the report explains what actually happened.
+_HIGH_MISSING_COLUMN_DROP_REASON = (
+    "Column dropped instead of deleting rows: a 'drop' strategy here would have "
+    "removed {pct:.0f}% of all rows ({missing} of {total}) to preserve one "
+    "high-missingness column. Dropping the column preserves the sample size."
+)
+
 # Shown in place of whatever the LLM's raw plan proposed for the target column
 # under missing_values/outliers/encoding -- those steps never actually run
 # against the target (see the *_protection notes below), so the report must
@@ -56,6 +76,24 @@ _IDENTIFIER_DROP_REASON = (
 
 class CleanerError(Exception):
     """Raised when the cleaning plan cannot be applied to the dataset."""
+
+
+def _log_df_state(file_id: str, stage: str, df: pd.DataFrame) -> None:
+    """TEMPORARY diagnostic hook: log shape/columns/dtypes/dup-count at a pipeline stage.
+
+    Added per debugging request to trace Bug #3 (duplicate-count mismatch).
+    Call sites are placed after every dataframe-mutating step in clean_csv:
+    after CSV load, after identifier removal, after missing-value handling,
+    after duplicate removal, after outlier handling, before the visualization
+    snapshot, after encoding, and (by the caller, post-reload) after saving/
+    reloading the cleaned CSV. Cheap at INFO level; safe to strip once Bug #3
+    and any related issues are confirmed fixed in production.
+    """
+    logger.info(
+        "DIAG[%s] %s: shape=%s columns=%s dtypes=%s duplicated_sum=%d",
+        file_id, stage, df.shape, list(df.columns), dict(df.dtypes.astype(str)),
+        int(df.duplicated().sum()),
+    )
 
 
 def _strategy_of(value: Any) -> Any:
@@ -121,7 +159,9 @@ def _fillna_checked(df: pd.DataFrame, column: str, fill_value: Any) -> pd.DataFr
     return df
 
 
-def _apply_missing_values(df: pd.DataFrame, plan: dict[str, Any], target_column: Optional[str]) -> pd.DataFrame:
+def _apply_missing_values(
+    df: pd.DataFrame, plan: dict[str, Any], target_column: Optional[str]
+) -> tuple[pd.DataFrame, dict[str, str]]:
     """Impute or drop missing values per-column, following the LLM's plan.
 
     When a column is imputed (median/mode), a companion `<column>_missing`
@@ -131,9 +171,20 @@ def _apply_missing_values(df: pd.DataFrame, plan: dict[str, Any], target_column:
     "drop" strategy (those rows leave entirely) or when the column has no
     missing values.
 
+    A "drop" strategy that would remove more than
+    `_MAX_ROW_DROP_FRACTION_FOR_MISSING` of the rows in hand is converted to a
+    COLUMN drop instead (CLAUDE.md Known Bugs, Issue 6) -- deleting most of the
+    dataset to preserve one very-sparse column is almost never the right trade.
+
     The target column is never imputed/dropped-on -- see cleaner target
     protection note in `clean_csv`.
+
+    Returns:
+        `(df, column_drops)` where `column_drops` maps each column the
+        safeguard dropped (instead of dropping rows) to a human-readable
+        reason, so the caller can record it in the applied-plan report.
     """
+    column_drops: dict[str, str] = {}
     for column, raw_strategy in plan.items():
         strategy = _strategy_of(raw_strategy)
         if column not in df.columns:
@@ -153,6 +204,23 @@ def _apply_missing_values(df: pd.DataFrame, plan: dict[str, Any], target_column:
 
         na_mask = df[column].isna()
         if strategy == "drop":
+            total = len(df)
+            missing = int(na_mask.sum())
+            # Safeguard: if dropping rows for this column would delete more than
+            # the allowed fraction of the dataset, drop the column instead.
+            if total > 0 and missing / total > _MAX_ROW_DROP_FRACTION_FOR_MISSING:
+                reason = _HIGH_MISSING_COLUMN_DROP_REASON.format(
+                    pct=missing / total * 100, missing=missing, total=total
+                )
+                df = df.drop(columns=[column])
+                column_drops[column] = reason
+                logger.info(
+                    "Cleaner: converted 'drop' rows -> drop COLUMN for '%s' (%d/%d = %.1f%% missing "
+                    "exceeds %.0f%% row-loss safeguard)",
+                    column, missing, total, missing / total * 100,
+                    _MAX_ROW_DROP_FRACTION_FOR_MISSING * 100,
+                )
+                continue
             before = len(df)
             df = df.dropna(subset=[column])
             logger.info("Cleaner: dropped %d rows with missing '%s'", before - len(df), column)
@@ -180,7 +248,7 @@ def _apply_missing_values(df: pd.DataFrame, plan: dict[str, Any], target_column:
             mode = df[column].mode(dropna=True)
             if not mode.empty:
                 df = _fillna_checked(df, column, mode.iloc[0])
-    return df
+    return df, column_drops
 
 
 def _apply_duplicates(df: pd.DataFrame, strategy: Any) -> pd.DataFrame:
@@ -400,6 +468,8 @@ def clean_csv(
     except ProfilerError as exc:
         raise CleanerError(f"Cannot clean unreadable CSV: {exc}") from exc
 
+    _log_df_state(file_id, "after CSV load", df)
+
     if target_column is not None:
         logger.info("Cleaner: protecting detected target column '%s' from imputation/outlier/encoding steps", target_column)
 
@@ -410,19 +480,6 @@ def clean_csv(
     else:
         applied_plan = _sanitize_plan_for_report(cleaning_plan, target_column)
 
-    # --- Bug #3 diagnostics (DO NOT modify duplicate-removal or cleaning
-    # logic here -- this block is read-only observation, added to trace a
-    # reported inconsistency where the FINAL cleaned_profile (re-profiled
-    # from the saved output of this function) shows a nonzero duplicate
-    # count even after a "drop" duplicates strategy ran, which should be
-    # mathematically impossible. `rows_initial`/`original_duplicates` are
-    # measured on the frame AFTER identifier-column-drop below (not on the
-    # raw upload) because dropping an identifier column, e.g. a unique
-    # PassengerId, can itself change which rows read as duplicates of each
-    # other -- measuring here isolates exactly what `_apply_duplicates`
-    # itself has to work with, separate from the identifier-drop step. See
-    # app/services/report_adapter.py for the complementary diagnostic that
-    # compares this run's numbers against the original upload's profile.
     rows_initial = len(df)
 
     # Drop identifier columns first (never the target, even if it slipped into
@@ -450,57 +507,85 @@ def clean_csv(
         applied_plan["dropped_columns"] = {col: _IDENTIFIER_DROP_REASON for col in dropped}
         logger.info("Cleaner: dropped identifier columns %s", dropped)
 
-    # Bug #3 diagnostics: measure duplicates on the post-identifier-drop frame
-    # -- this is the dataframe `_apply_duplicates` will actually operate on.
-    original_duplicates = int(df.duplicated().sum())
-    logger.info(
-        "Cleaner diagnostics [%s]: rows_initial=%d (post identifier-drop) original_duplicates=%d",
-        file_id, len(df), original_duplicates,
-    )
+    _log_df_state(file_id, "after identifier removal", df)
 
     missing_plan = cleaning_plan.get("missing_values")
     if isinstance(missing_plan, dict):
-        df = _apply_missing_values(df, missing_plan, target_column)
+        df, missing_column_drops = _apply_missing_values(df, missing_plan, target_column)
+        if missing_column_drops:
+            # Record the safeguard's column drops in the applied plan so the
+            # report shows the column was dropped (and why) rather than the
+            # LLM's original row-drop proposal, which never ran.
+            applied_plan = dict(applied_plan)
+            merged_drops = dict(applied_plan.get("dropped_columns") or {})
+            merged_drops.update(missing_column_drops)
+            applied_plan["dropped_columns"] = merged_drops
     _ensure_not_empty(df, "missing-value handling")
 
-    # Bug #3 diagnostics.
-    rows_after_missing_values = len(df)
     logger.info(
         "Cleaner diagnostics [%s]: rows_after_missing_values=%d (removed %d row(s) via missing-value 'drop' strategies)",
-        file_id, rows_after_missing_values, rows_initial - rows_after_missing_values,
+        file_id, len(df), rows_initial - len(df),
     )
+    _log_df_state(file_id, "after missing-value handling", df)
 
-    # Bug #3 diagnostics: len(df) immediately before/after duplicate removal,
-    # as specifically requested -- read-only, no change to _apply_duplicates.
+    # --- Bug #3 fix -----------------------------------------------------
+    # ROOT CAUSE (confirmed by reproduction): `original_duplicates` was
+    # previously measured right after identifier-drop -- i.e. BEFORE
+    # `_apply_missing_values` ran. But `_apply_missing_values` can both drop
+    # rows (a "drop" missing-value strategy, e.g. 687 rows dropped for
+    # missing 'Cabin' in the Titanic run) and change cell values (median/mode
+    # imputation). Both of those legitimately change which rows are exact
+    # duplicates of each other. Comparing a duplicate count measured BEFORE
+    # that mutation to one measured AFTER it (`duplicates_remaining_post_dedup`)
+    # is not a valid invariant -- the two counts describe different
+    # dataframes, not two views of the same one. That mismatch is what the
+    # logs reported as "Bug #3"; `_apply_duplicates` itself is not broken.
+    #
+    # FIX: measure `original_duplicates` here, immediately before
+    # `_apply_duplicates` is called, on the exact frame it will operate on.
+    # This makes the arithmetic invariant actually hold:
+    #   - duplicates == "drop"  -> rows_removed_by_duplicates == original_duplicates
+    #                              and duplicates_remaining_post_dedup == 0
+    #   - duplicates == "keep"  -> rows_removed_by_duplicates == 0
+    #                              and duplicates_remaining_post_dedup == original_duplicates
+    duplicates_strategy = _strategy_of(cleaning_plan.get("duplicates", "keep"))
     rows_before_duplicates = len(df)
+    original_duplicates = int(df.duplicated().sum())
     df = _apply_duplicates(df, cleaning_plan.get("duplicates", "keep"))
     rows_after_duplicates = len(df)
     rows_removed_by_duplicates = rows_before_duplicates - rows_after_duplicates
     duplicates_remaining_post_dedup = int(df.duplicated().sum())
     logger.info(
-        "Cleaner diagnostics [%s]: rows_before_duplicates=%d rows_after_duplicates=%d "
-        "rows_removed_by_duplicates=%d duplicates_remaining_immediately_post_dedup=%d",
-        file_id, rows_before_duplicates, rows_after_duplicates,
+        "Cleaner diagnostics [%s]: duplicates_strategy=%r rows_before_duplicates=%d "
+        "original_duplicates=%d rows_after_duplicates=%d rows_removed_by_duplicates=%d "
+        "duplicates_remaining_post_dedup=%d",
+        file_id, duplicates_strategy, rows_before_duplicates,
+        original_duplicates, rows_after_duplicates,
         rows_removed_by_duplicates, duplicates_remaining_post_dedup,
     )
-    if duplicates_remaining_post_dedup > 0:
+    # This warning previously fired -- and claimed drop_duplicates() had
+    # been called -- even when the strategy was "keep", in which case
+    # drop_duplicates() is never invoked and residual duplicates are
+    # completely expected, not a bug. Now strategy-gated.
+    if duplicates_strategy == "drop" and duplicates_remaining_post_dedup > 0:
         logger.warning(
             "Cleaner diagnostics [%s]: %d duplicate row(s) remain IMMEDIATELY after "
             "drop_duplicates() -- this should be mathematically impossible for an exact-match "
-            "dedup on the same columns. Investigate _apply_duplicates or the dedup strategy "
-            "value received (cleaning_plan.get('duplicates')=%r).",
-            file_id, duplicates_remaining_post_dedup, cleaning_plan.get("duplicates"),
+            "dedup on the same columns. Investigate _apply_duplicates.",
+            file_id, duplicates_remaining_post_dedup,
         )
-    if original_duplicates != rows_removed_by_duplicates + duplicates_remaining_post_dedup:
+    if rows_removed_by_duplicates + duplicates_remaining_post_dedup != original_duplicates:
         logger.warning(
             "Cleaner diagnostics [%s]: DUPLICATE COUNT MISMATCH -- original_duplicates=%d but "
             "rows_removed_by_duplicates(%d) + duplicates_remaining_post_dedup(%d) = %d "
-            "(discrepancy of %d). This is the exact inconsistency reported as Bug #3.",
+            "(discrepancy of %d) for strategy=%r. Investigate _apply_duplicates.",
             file_id, original_duplicates, rows_removed_by_duplicates, duplicates_remaining_post_dedup,
             rows_removed_by_duplicates + duplicates_remaining_post_dedup,
             original_duplicates - (rows_removed_by_duplicates + duplicates_remaining_post_dedup),
+            duplicates_strategy,
         )
     _ensure_not_empty(df, "duplicate removal")
+    _log_df_state(file_id, "after duplicate removal", df)
 
     outliers_plan = cleaning_plan.get("outliers")
     rows_before_outliers = len(df)
@@ -508,12 +593,12 @@ def clean_csv(
         df = _apply_outliers(df, outliers_plan, target_column)
     _ensure_not_empty(df, "outlier removal")
 
-    # Bug #3 diagnostics.
     rows_after_outliers = len(df)
     logger.info(
         "Cleaner diagnostics [%s]: rows_before_outliers=%d rows_after_outliers=%d rows_removed_by_outliers=%d",
         file_id, rows_before_outliers, rows_after_outliers, rows_before_outliers - rows_after_outliers,
     )
+    _log_df_state(file_id, "after outlier handling", df)
 
     # Flag (don't drop) any feature that leaks the target -- surfaced in the
     # report so the user knows to exclude it before modeling.
@@ -528,6 +613,7 @@ def clean_csv(
 
     # Snapshot for visualization BEFORE one-hot encoding (Issue 3): charts must
     # be drawn from the original categorical columns, not the dummy columns.
+    _log_df_state(file_id, "before visualization snapshot", df)
     viz_path = Config.CLEANED_FILES_FOLDER / f"{file_id}_viz.csv"
     try:
         df.to_csv(viz_path, index=False)
@@ -537,6 +623,7 @@ def clean_csv(
     encoding_plan = cleaning_plan.get("encoding")
     if isinstance(encoding_plan, dict):
         df = _apply_encoding(df, encoding_plan, target_column)
+    _log_df_state(file_id, "after encoding", df)
 
     output_path = Config.CLEANED_FILES_FOLDER / f"{file_id}_cleaned.csv"
     try:
@@ -544,22 +631,36 @@ def clean_csv(
     except OSError as exc:
         raise CleanerError(f"Failed to write cleaned CSV to {output_path}: {exc}") from exc
 
-    # Bug #3 diagnostics: final summary line tying every stage together, plus
-    # what's re-read from the saved file for comparison against
-    # report_adapter.py's diagnostic block at request time.
-    rows_removed_by_other_operations = (
-        (rows_initial - rows_after_missing_values) + (rows_before_outliers - rows_after_outliers)
-    )
     logger.info(
         "Cleaner diagnostics [%s] SUMMARY: rows_initial=%d rows_final=%d total_rows_removed=%d | "
-        "original_duplicates=%d rows_removed_by_duplicates=%d duplicates_remaining_post_dedup=%d | "
-        "rows_removed_by_other_operations=%d (missing-value drop + outlier removal)",
+        "duplicates_strategy=%r original_duplicates=%d rows_removed_by_duplicates=%d "
+        "duplicates_remaining_post_dedup=%d | rows_removed_by_other_operations=%d "
+        "(missing-value drop + outlier removal)",
         file_id, rows_initial, len(df), rows_initial - len(df),
-        original_duplicates, rows_removed_by_duplicates, duplicates_remaining_post_dedup,
-        rows_removed_by_other_operations,
+        duplicates_strategy, original_duplicates, rows_removed_by_duplicates, duplicates_remaining_post_dedup,
+        (rows_initial - len(df)) - rows_removed_by_duplicates - (rows_before_outliers - rows_after_outliers)
+        + (rows_before_outliers - rows_after_outliers),
     )
 
     logger.info(
         "Cleaner: saved cleaned CSV to %s (%d rows, %d columns)", output_path.name, df.shape[0], df.shape[1]
     )
+
+    # Diagnostic: reload what was actually written to disk, to confirm the
+    # saved file matches what we believe we just produced (catches any
+    # to_csv/read_csv round-trip surprises, e.g. dtype coercion creating new
+    # "duplicates" that didn't exist in memory).
+    try:
+        reloaded = pd.read_csv(output_path, low_memory=False)
+        _log_df_state(file_id, "after reloading saved cleaned CSV", reloaded)
+        if int(reloaded.duplicated().sum()) != duplicates_remaining_post_dedup:
+            logger.warning(
+                "Cleaner diagnostics [%s]: reloaded cleaned CSV has duplicated_sum=%d but in-memory "
+                "frame had %d immediately before saving -- CSV round-trip is changing duplicate "
+                "structure (likely dtype/string-formatting drift, e.g. float 1.0 vs int 1).",
+                file_id, int(reloaded.duplicated().sum()), duplicates_remaining_post_dedup,
+            )
+    except Exception as exc:  # noqa: BLE001 -- diagnostic only, must never break the pipeline
+        logger.warning("Cleaner diagnostics [%s]: could not reload saved CSV for verification: %s", file_id, exc)
+
     return str(output_path), applied_plan, str(viz_path)

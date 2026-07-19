@@ -386,3 +386,4 @@ async def download_charts_zip(file_id: str) -> StreamingResponse:
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{file_id}_charts.zip"'},
     )
+

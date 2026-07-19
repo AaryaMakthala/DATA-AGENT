@@ -1,398 +1,263 @@
-# AI Data Analyst & Data Cleaning Agent — Project Spec
+# AI Data Analyst & Data Cleaning Agent — As-Built Source of Truth
 
-This file is the source of truth for this project. Read it fully before writing code.
-Follow the build order in "Build Phases" at the bottom — do not skip ahead to later
-phases until the current phase actually runs and is verified.
+This document is the authoritative description of the current architecture, verified
+against the real files rather than a plan. If implementation changes cause this document
+to become inaccurate, update the documentation after verifying the new behavior. The
+original phase-by-phase build spec is preserved at the bottom under "Appendix: Original
+Build Spec" for historical context; the sections above it are authoritative.
 
-## 1. Objective
-
-Build a production-style full-stack AI Data Analyst system.
-
-Flow: user uploads a CSV → Python profiles it → the profile (not the raw data) goes to
-an LLM for a cleaning strategy, explanation, insights, and algorithm recommendations →
-Python executes the actual cleaning and chart generation → the system returns a cleaned
-CSV, a report, charts, and ML algorithm recommendations.
-
-**Hard rule: the LLM never touches or modifies the dataset directly.** It only receives
-a JSON profile and returns a plan/text. All reading, calculating, cleaning, and
-visualizing is done in Python.
-
-## 2. Tech Stack
-
-**Frontend:** Next.js 15 (App Router), TypeScript, Tailwind CSS, React Hook Form, Zod,
-Axios or fetch.
-
-**Backend:** Python 3.11+, FastAPI, Pydantic, Uvicorn.
-
-**AI orchestration:** LangChain, LangGraph (StateGraph).
-
-**LLM providers (fallback chain, ONE call at a time, never parallel):**
-1. Google Gemini
-2. Groq
-3. OpenRouter
-
-If Gemini errors (bad key, rate limit, timeout, unavailable) → try Groq → if that
-errors → try OpenRouter → if all fail, return a clear error to the caller.
-
-**Data:** pandas, numpy, scikit-learn.
-**Visualization:** matplotlib, seaborn, plotly.
-**Deployment:** Docker + docker-compose.
-
-**Explicitly excluded — do not add these:** authentication, vector databases,
-multi-agent architectures, MCP, or any tooling beyond what's listed here. Keep it
-simple and scalable, not maximal.
-
-## 3. Project Structure
-
-```
-AI-Data-Analyst-Agent/
-  frontend/
-    app/
-      page.tsx
-      upload/page.tsx
-      dashboard/page.tsx
-      layout.tsx
-      globals.css
-    components/
-      UploadBox.tsx
-      DatasetSummary.tsx
-      CleaningReport.tsx
-      ChartViewer.tsx
-      AlgorithmRecommendation.tsx
-      DownloadButtons.tsx
-      LoadingState.tsx
-      ErrorMessage.tsx
-    lib/
-      api.ts
-    types/
-      analysis.ts
-  backend/
-    app/
-      main.py
-      api/
-        routes.py
-        schemas.py
-      agents/
-        graph.py
-        state.py
-        llm_router.py
-      tools/
-        profiler.py
-        cleaner.py
-        visualizer.py
-        ml_recommender.py
-      services/
-        csv_service.py
-        file_service.py
-      prompts/
-        cleaning_prompt.py
-        analysis_prompt.py
-      utils/
-        config.py
-        logger.py
-    uploads/
-    outputs/
-      cleaned_files/
-      charts/
-      reports/
-    requirements.txt
-    Dockerfile
-    .env
-    .env.example
-  docker-compose.yml
-  README.md
-```
-
-## 4. Python Profiling Engine (`profiler.py`)
-
-Analyze and return as JSON:
-- `shape`: rows, columns
-- `columns`: names + dtypes
-- `missing_values`: per-column counts, e.g. `{"salary": 200, "age": 50}`
-- `duplicates`: duplicate row count
-- Numerical columns: mean, median, std, min, max
-- Categorical columns: unique value count, frequency table
-- `outliers`: per numeric column, via IQR method
-- `correlations`: correlation matrix for numeric columns
-
-Example shape of the returned JSON:
-```json
-{
-  "shape": {"rows": 5000, "columns": 20},
-  "missing_values": {},
-  "duplicates": 50,
-  "columns": {},
-  "outliers": {},
-  "correlations": {}
-}
-```
-
-## 5. LangGraph Workflow (`agents/graph.py`, `agents/state.py`)
-
-State object:
-```
-{
-  file_path,
-  profile,
-  cleaning_plan,
-  cleaned_file,
-  charts,
-  report,
-  recommendations
-}
-```
-
-Node sequence:
-```
-START → Upload CSV → Profiler Node → LLM Analysis Node → Cleaning Plan Node
-→ Python Cleaning Node → Visualization Node → ML Recommendation Node → END
-```
-
-## 6. LLM Router (`agents/llm_router.py`)
-
-```
-class LLMRouter:
-    def generate(prompt: str) -> str:
-        try: return call_gemini(prompt)
-        except Exception:
-            try: return call_groq(prompt)
-            except Exception:
-                try: return call_openrouter(prompt)
-                except Exception: raise a clear, caught error
-```
-
-Use LangChain provider wrappers. Handle: invalid API key, rate limit, timeout, model
-unavailable, network errors — each with a distinguishable, logged error message.
-
-## 7. Cleaner (`tools/cleaner.py`)
-
-- Missing values: numerical → median, categorical → mode
-- Duplicates: drop
-- Outliers: detect via IQR, optionally cap or remove
-- Categorical encoding: one-hot when required
-- Save output to `outputs/cleaned_files/`
-
-## 8. Visualizer (`tools/visualizer.py`)
-
-Rules:
-- Categorical column → bar chart
-- Numerical column → histogram
-- Two numerical columns → scatter plot
-- Correlation matrix → heatmap
-
-Save to `outputs/charts/`.
-
-## 9. ML Recommender (`tools/ml_recommender.py`)
-
-**This is a heuristic recommender, not a training pipeline. No models are ever
-trained, fit, or run here.** All output comes from reasoning about the dataset's
-characteristics — shape, dtypes, target column, cardinality, missing data — using
-established rules of thumb about which algorithms suit which kinds of data. This
-keeps the pipeline fast and avoids the recommender becoming its own slow, heavy
-subsystem.
-
-**Stage A — Problem type detection (rule-based, in Python, no LLM, no training):**
-- If there's no clear target column (last column, or one named like `target`,
-  `label`, `class`, `y`) → clustering.
-- If a target column is identified:
-  - Target dtype is object/category, or numeric with low cardinality (e.g. ≤ 20
-    unique values and unique/total ratio below ~0.05) → classification.
-  - Target dtype is numeric/continuous with high cardinality → regression.
-- Log the detected type and the reasoning (cardinality, dtype, ratio checked) so
-  it's auditable.
-
-**Stage B — Heuristic model ranking (no training, just reasoned suggestions):**
-Based on dataset characteristics — row count, column count, ratio of numeric to
-categorical features, class balance (for classification), presence of outliers/
-missing data from the profiler — rank the standard candidates for the detected
-problem type using documented rules of thumb, e.g.:
-- Small dataset (few hundred rows or fewer) → simpler models (Logistic/Linear
-  Regression) favored over tree ensembles, which need more data to shine.
-- High-dimensional or mixed categorical/numeric data → tree-based models
-  (Random Forest, Gradient Boosting, XGBoost) favored, since they handle mixed
-  types and non-linear relationships without heavy preprocessing.
-- Presence of significant outliers → tree-based models favored over Linear/
-  Logistic Regression, which are more sensitive to outliers.
-- Clustering: recommend KMeans when the profiler suggests roughly spherical,
-  similarly-sized numeric clusters are plausible (e.g. no extreme skew); note
-  DBSCAN as an alternative when density-based structure or noise/outliers in
-  the data make KMeans's assumptions a poor fit.
-- Classification candidates to rank from: Logistic Regression, Random Forest,
-  Gradient Boosting, XGBoost.
-- Regression candidates to rank from: Linear Regression, Random Forest
-  Regressor, Gradient Boosting.
-- Clustering candidates to rank from: KMeans, DBSCAN.
-
-**Output shape** — a ranked list with a plain-English reason per model, and a
-top pick, but explicitly no performance metrics (since nothing was trained):
-```json
-{
-  "problem_type": "classification",
-  "target_column": "churn",
-  "detection_reasoning": "Target 'churn' is categorical with 2 unique values.",
-  "ranked_models": [
-    {
-      "name": "Random Forest",
-      "reason": "Handles the mix of numeric and categorical features well and is robust to the outliers found in the profile, without needing heavy preprocessing."
-    },
-    {
-      "name": "Logistic Regression",
-      "reason": "A reasonable simpler baseline, but more sensitive to the outliers detected in this dataset than tree-based options."
-    }
-  ],
-  "top_recommendation": "Random Forest"
-}
-```
-This is what gets returned to the frontend and shown in `AlgorithmRecommendation.tsx`
-— a reasoned suggestion list, not a benchmark table. Make this explicit anywhere it's
-described (docstrings, API docs, README) so it's never mistaken for a claim about
-actual measured performance on this data.
-
-## 10. FastAPI Endpoints
-
-- `POST /upload` — upload a CSV, return a `file_id`
-- `POST /analyze/{file_id}` — run the full LangGraph workflow
-- `GET /results/{file_id}` — return `{ cleaned_file, charts, report, recommendations }`
-- Enable CORS for the Next.js frontend origin.
-
-## 11. Frontend Requirements
-
-- Drag-and-drop CSV upload with upload progress
-- Analysis status / loading state
-- Dataset summary display
-- Cleaning suggestions display
-- Chart viewer
-- Algorithm recommendations display
-- Download button for cleaned CSV
-- Reads backend URL from `NEXT_PUBLIC_API_URL`
-
-## 12. Environment Files
-
-**backend/.env.example**
-```
-GEMINI_API_KEY=
-GROQ_API_KEY=
-OPENROUTER_API_KEY=
-UPLOAD_FOLDER=uploads
-OUTPUT_FOLDER=outputs
-```
-
-**frontend/.env.local.example**
-```
-NEXT_PUBLIC_API_URL=http://localhost:8000
-```
-
-## 13. Error Handling — must cover
-
-**CSV:** empty file, corrupted CSV, unsupported file type, very large file, encoding
-issues (try `utf-8`, fallback to `latin-1`), missing headers.
-
-**Pandas:** KeyError, ValueError, EmptyDataError.
-
-**LLM:** invalid API key, quota exceeded, timeout, rate limit, model unavailable —
-each provider failure should trigger the fallback chain, not just fail silently.
-
-**API:** 400 bad request, 404 file not found, 500 internal error — use FastAPI
-`HTTPException` with meaningful messages.
-
-**Frontend:** failed API call, upload failure, infinite loading state, backend
-unreachable — all need visible user-facing error states, not silent failures.
-
-Use try/except throughout, structured logging, and meaningful error messages —
-no bare `except: pass`.
-
-## 14. Code Quality
-
-Clean modular architecture, production style, type hints everywhere, docstrings,
-comments where logic isn't obvious, no unnecessary complexity or premature
-abstraction.
-
-**No placeholders.** Every function must be a real, working implementation —
-no `# TODO: implement this later`, no `pass`, no stub functions that return fake
-data "for now." If a piece genuinely can't be finished in the current phase (e.g.
-it depends on a later phase), don't create the file yet at all rather than filling
-it with dummy logic. Every number shown in the UI or report (stats, scores, chart
-values) must come from an actual pandas/numpy/sklearn computation on the real
-uploaded data — never a hardcoded or illustrative placeholder value.
-
-## 15. Docker
-
-- `backend/Dockerfile`
-- Root `docker-compose.yml` with `backend` and `frontend` services
-
-## 16. README
-
-Must include: project explanation, architecture diagram, installation steps,
-environment setup, how to run locally, API documentation, screenshot placeholders,
-future improvements section.
+Last reconciled: 2026-07-19, against a full read of `backend/app/**` + `frontend/**`,
+with the regression suite (`backend/tests/test_regressions.py`, 6/6 passing) and a
+clean `tsc --noEmit` as runtime proof.
 
 ---
 
-## Build Phases (follow in order — do not skip ahead)
+## 1. Objective (unchanged)
 
-**Phase 1 — Backend core, no LLM yet**
-Scaffold `backend/` structure. Implement `profiler.py` fully and test it standalone
-against a sample CSV via a script or `python -c`. Confirm the JSON output shape
-matches Section 4 before moving on.
+Full-stack AI Data Analyst. Flow: user uploads a CSV → Python profiles it → the
+**profile (not the raw data)** goes to an LLM for analysis + a cleaning plan → Python
+executes the actual cleaning, charting, and heuristic ML recommendation → the system
+returns a cleaned CSV, an enriched dashboard report, charts, and algorithm suggestions.
 
-**Phase 2 — Backend API skeleton**
-Implement `/upload` and a stub `/analyze/{file_id}` that just runs the profiler and
-returns it. Run uvicorn, curl both endpoints with a real CSV, confirm real responses
-(not just "code compiles").
+**Hard rule (still enforced): the LLM never touches or modifies the dataset.** It only
+receives a JSON profile and returns a plan/text. All reading, calculating, cleaning,
+and visualizing is done in Python. Verified: both LLM prompts
+(`prompts/analysis_prompt.py`, `prompts/cleaning_prompt.py`) receive only
+`json.dumps(profile)`, never row data.
 
-**Phase 3 — LLM router + LangGraph**
-Implement `llm_router.py` with the fallback chain, and `graph.py`/`state.py` with the
-full node sequence. Wire real API keys into `.env` (I will provide these) and run one
-full end-to-end `/analyze` call. Confirm the fallback actually triggers by temporarily
-breaking the Gemini key and observing it fall through to Groq.
+## 2. Tech Stack (as built)
 
-**Phase 4 — Cleaner, Visualizer, ML Recommender**
-Implement each tool, wire into the graph, confirm `/results/{file_id}` returns a
-cleaned file path, chart file paths, and recommendations that all actually exist on
-disk.
+**Backend:** Python 3.11+ target (dev venv runs 3.10.11), FastAPI, Pydantic, Uvicorn,
+LangChain + LangGraph (`StateGraph`), pandas, numpy, scikit-learn, matplotlib/seaborn.
+**LLM fallback chain (one call at a time):** Gemini → Groq → OpenRouter, in
+`agents/llm_router.py`.
+**Frontend:** Next.js 15 (App Router), TypeScript, Tailwind, React Hook Form, Zod,
+axios. Verified deps in `frontend/package.json` (next 15.5.20, react 19.2.4, zod 3.24).
 
-**Phase 5 — Frontend**
-Scaffold Next.js app, build the upload flow against the now-working backend API,
-verify the full user journey in a browser: upload → analyze → view results → download.
+## 3. Design Principles
 
-**Phase 6 — README + polish**
-Write the README once behavior is verified, so it documents what was actually built
-rather than what was planned.
+Concise architectural rules the codebase upholds. They are the "why" behind the
+implementation sections that follow; each is enforced somewhere in §4–§6.
 
-**Phase 7 — Docker (last, on request)**
-Containerize both services only after everything above runs correctly outside
-Docker. Verify `docker-compose up` gives a working system from a clean checkout.
-Do not start this phase until explicitly told to — the project must run natively
-first.
+- **The LLM reasons over profiles, never raw data.** It receives only the JSON profile
+  and returns a plan or text; Python performs every mutation (§1).
+- **Preserve observations (rows) whenever possible.** Row deletion is a last resort, not
+  a default cleaning step.
+- **High-missingness features are dropped as columns or imputed — never by deleting most
+  of the dataset** (§6.4).
+- **Target detection always occurs before encoding**, on the original dataframe (§4a).
+- **Visualization always occurs before encoding**, from a pre-encoding snapshot (§5).
+- **Identifier columns are excluded from ML reasoning** and from charts (§5, §6.6).
+- **The target column is never modified during cleaning** — no imputation, outlier
+  handling, or encoding touches it (§5, §6.6).
+- **Dataset validation gates the pipeline before the LLM runs.** Unmodelable datasets
+  route straight to END, so no LLM call, cleaning, or charts are produced for them (§4a).
+- **Every documented fix must be backed by runtime verification** — no "it compiles"
+  without pasted output (§8).
 
-At the end of every phase: run it, show me it actually works (server logs, a curl
-response, a screenshot description, whatever's relevant), and only then proceed.
+## 4. The Real Request Path (verified, end to end)
 
-## Known Bugs — Required Fixes (found during Phase 5 testing, confirmed against real data)
+This is the actual wiring — trust this over any older diagram.
 
-These are not optional polish — they produce incorrect output and must be fixed
-before Phase 6. See CLAUDE_FIXES_AND_DESIGN.md for full details and verification
-steps for each. Summary, in required fix order:
+```
+POST /upload            -> saves CSV, returns file_id            (routes.py:138)
+POST /analyze/{file_id} -> runs the LangGraph, writes report JSON to disk
+GET  /results/{file_id} -> reads report JSON, enriches it, returns dashboard contract
+GET  /download/{file_id}         -> cleaned CSV attachment       (routes.py:319)
+GET  /download/json/{file_id}    -> report JSON as attachment    (routes.py:333)
+GET  /download/charts/{file_id}  -> zip of this run's PNG charts (routes.py:359)
+```
 
-1. **Outlier cleaning must never modify the target column.** Confirmed root cause:
-   on classification_dataset.csv (Target: 94 zeros, 6 ones), IQR outlier removal
-   strips the 6 minority-class rows because they read as statistical outliers on a
-   binary column, leaving Target with 1 unique value by the time it reaches the
-   recommender. Exclude target_column from all outlier detection/capping/removal,
-   for every problem type.
-2. **Reject single/zero-class targets outright.** If nunique(target) <= 1, return
-   problem_type="invalid" and stop recommending models. This must exist as a
-   backstop even after #1 is fixed.
-3. **Target detection must run on the original dataframe, before one-hot
-   encoding** — never re-derive target/problem-type from encoded columns.
-4. **Visualization must run before one-hot encoding**, or must explicitly exclude
-   encoded dummy columns from scatter/histogram generation. Charts like
-   "Education_Bachelor vs Education_High School" (dummy-vs-dummy scatter plots)
-   are structurally meaningless and must not be generated.
-5. **Identifier columns (ID, Name, Customer_ID, etc.) must be excluded** from
-   charts and from ML feature reasoning — detect via name pattern + uniqueness
-   ratio on non-numeric columns.
+### 4a. The LangGraph (`agents/graph.py`, state in `agents/state.py`)
 
-Do not proceed to Phase 6 (README) until all five are fixed and verified against
-classification_dataset.csv, sample_with_nan.csv, and a no-target dataset, with
-actual response output pasted as proof — not just "it works now."
+The graph runs on a **plain `AnalystState` TypedDict** (`agents/state.py`). Node
+sequence:
+
+```
+START -> profiler -> target_detection -> validation
+      -(valid)->  llm_nodes  -> python_cleaning -> visualization -> ml_recommendation -> END
+      -(invalid)-> END        (no LLM, no cleaning, no charts for unmodelable data)
+```
+
+Key facts about the graph, all verified in code:
+
+- **`file_id` is generated once** in `profiler_node` and threaded through state; every
+  downstream node reads `state["file_id"]` rather than minting its own UUID (fixes an
+  old bug where cleaned files and charts got different IDs).
+- **Target detection runs on the ORIGINAL dataframe** (`target_detection_node`), before
+  any cleaning/encoding — never re-derived from encoded dummy columns.
+- **`llm_nodes` runs the two independent LLM calls concurrently** (analysis + cleaning
+  plan) on a 2-worker `ThreadPoolExecutor`. Both futures are waited on so a double
+  failure logs both provider-chain errors before raising.
+- **`_run_analysis_llm` parses the analysis response as JSON** (`{overview,
+  key_findings, risks, recommendations}`), falling back to the raw string.
+  `state["report"]` is therefore `dict | str`; `services/executive_summary.py` handles
+  both.
+- **`state["profile"]` is always the ORIGINAL pre-cleaning profile.**
+  `ml_recommendation_node` re-profiles the cleaned file and stores it as
+  `state["cleaned_profile"]` (a real field on `AnalystState`), plus a
+  `quality_score` computed from the cleaned profile.
+
+### 4b. The results enrichment (`services/report_adapter.py`)
+
+`GET /results` calls **`report_adapter.build_results_response(file_id, data)`**
+(`routes.py:312`), merged on top of a legacy flat payload. This is the **single real
+integration point** for the dashboard contract. It returns:
+
+```
+overview, quality{score, components, dashboard, health, issues},
+analysis{executive_summary, dataset_insights},
+visualizations{charts[]}, ml_recommendation{problem_type, target_column,
+detection_reasoning, top_recommendation, models[], why_not_others[], readiness,
+warnings[]}, downloads{cleaned_csv, charts_zip, analysis_report, json_results,
+cleaning_log}, metadata{row_count, column_count, processing_metrics},
+before_after (only when cleaned_profile is present)
+```
+
+`report_adapter.py` constructs `PipelineContext` **ad hoc, post-hoc** (from the stored
+report dict) and hands it to the formatter helpers. It builds two contexts: `ctx` from
+the **original** profile (overview/insights) and `before_ctx` pairing original+cleaned
+(before/after). See §6.1.
+
+### 4c. Formatter helpers (`services/`)
+
+`overview.py`, `insights.py`, `before_after.py`, `cleaning_report.py`,
+`quality_presentation.py`, `ml_presentation.py`, `executive_summary.py` are pure
+shaping functions called by `report_adapter.py`. `pipeline_context.py` provides the
+`PipelineContext` dataclass (+ `timed()` / `timings_as_dict()` timing helpers) they
+read off.
+
+**DELETED as dead code (2026-07-19):** `services/response_builder.py` and the
+module-level `build_context()` / `attach_target_detection()` / `attach_cleaned_profile()`
+functions in `pipeline_context.py`. These were an earlier "profile once, thread a shared
+context through the graph" design that was **never wired into `graph.py`**. The graph
+always used the plain `AnalystState` TypedDict flow. The `PipelineContext` *dataclass* is
+kept because `report_adapter`/`overview`/`insights`/`before_after` genuinely use it. **Do
+not reintroduce a `build_context`-style flow without actually wiring it into `graph.py`**
+— if you want the single-profile architecture, that is a real refactor (see §7.3), not a
+helper to call from `report_adapter`.
+
+## 5. Tools (`tools/`)
+
+- **`profiler.py`** — `profile_csv()` returns shape/columns/missing/duplicates/numeric
+  stats/categorical freqs/IQR outliers/correlations. Reads with `low_memory=False`
+  (avoids a real pandas `IndexError` on mixed-dtype columns) and an encoding fallback
+  (utf-8 → latin-1). Includes ragged-column detection + narrow auto-repair (§6.3).
+- **`cleaner.py`** — applies the LLM plan with pandas. Target column is **excluded** from
+  all missing-value/outlier/encoding steps. Identifier columns dropped. Missing-value
+  column-drop safeguard (§6.4). IQR outlier action skipped below 30 rows. Saves a
+  pre-encoding viz snapshot. Extensive `DIAG[...]` row-count logging (§6.2).
+- **`visualizer.py`** — every chart function returns a **metadata dict**
+  `{path, chart_type, title, description, interpretation}`, not a bare path. Charts are
+  drawn from the pre-encoding snapshot so no dummy-vs-dummy scatter plots.
+- **`ml_recommender.py`** — heuristic (NO training). Rule-based problem-type detection +
+  reasoned model ranking. Includes the `nunique(target) <= 1 -> invalid` backstop.
+- **`validator.py`** — gates unmodelable datasets to `valid=False` before the LLM runs.
+- **`data_quality.py`** — deterministic quality score from the (cleaned) profile.
+
+## 6. Fixed Bugs — current state (all verified, don't re-fix)
+
+**6.1 Bug #1 — banner/overview showed post-cleaning row counts.**
+FIXED at `report_adapter.py:167–202`. Overview/banner/dataset-dimensions/insights build
+their `ctx` from `profile_original` **only**. `quality_source_profile` and `before_ctx`
+separately use the cleaned profile. Never revert `ctx` to `profile_after or
+profile_original`.
+
+**6.2 Bug #3 — "impossible" duplicate-count mismatch.**
+Root cause was measuring `original_duplicates` **before** `_apply_missing_values` ran,
+then comparing it against a count taken after rows were removed — two different
+dataframes. FIXED at `cleaner.py`: `original_duplicates` is now measured immediately
+before `_apply_duplicates` (`cleaner.py:553`), and the "mathematically impossible"
+warning is gated on `duplicates_strategy == "drop"` (`cleaner.py:577`) so it never fires
+for a "keep" plan. `DIAG[...]` logging traces every row-count-changing step.
+`report_adapter.py` has a matching *observational* diagnostic (logging only, no fix).
+
+**6.3 Ragged-CSV auto-repair (profiler).**
+`_detect_ragged_columns()` catches a header/data field-count mismatch (the classic
+"single free-text banner line above the real header" case that made pandas silently
+collapse 9 of 10 columns into an implicit index). `_try_strip_leading_preamble()`
+attempts a **narrow, safe** auto-repair:
+- Gated on `header_fields == 1` AND the new header + all sampled rows agreeing on the
+  full column count.
+- Bounded by `_MAX_PREAMBLE_LINES_TO_STRIP = 1` — it only ever strips **one** line.
+- **2+ bad leading lines, or any inconsistency after stripping → falls back to raising
+  the original `ProfilerError`.** It cannot silently mis-repair a genuinely corrupt file
+  (proven by `test_ragged_header_genuinely_corrupt_file_still_raises`).
+To widen it later, raise `_MAX_PREAMBLE_LINES_TO_STRIP` — that's the single knob.
+
+**6.4 Missing-value column-drop safeguard (Issue 6 — FIXED 2026-07-19).**
+Previously the cleaning prompt told the LLM to choose `"drop"` for very-high-missingness
+columns, which deleted most of the dataset to preserve one sparse column (Titanic Cabin:
+687/891 rows gone). NOW: `_apply_missing_values` converts a `"drop"` that would remove
+more than `_MAX_ROW_DROP_FRACTION_FOR_MISSING` (**10%**) of the rows in hand into
+dropping the **COLUMN** instead, preserving sample size. Below the threshold, `"drop"`
+still drops rows. The conversion is recorded in `applied_plan["dropped_columns"]` with a
+reason so the report is honest. `prompts/cleaning_prompt.py` was updated to describe this
+behavior to the LLM. Covered by `test_high_missingness_drop_converts_to_column_drop` and
+`test_low_missingness_drop_still_drops_rows`.
+
+**6.5 Chart URL rendering.**
+`file_service.chart_path_to_url()` is the single filesystem-path → `/charts/<name>`
+converter; `report_adapter`'s chart manifest routes every path through it. Frontend
+`safeResolveAssetUrl` allowlist is `["/charts/", "/download/"]` — chart URLs and all four
+download URLs pass it (frontend detail in §9).
+
+**6.6 Prior known-bugs (Issues 1–5 from the original spec) remain fixed:** outlier
+cleaning excludes the target; single/zero-class targets → `problem_type="invalid"`;
+target detection on the original frame; visualization before encoding; identifier
+columns excluded from charts and ML reasoning.
+
+## 7. Open Items / Known Gaps (confirmed still open)
+
+1. **`analysis_report` and `cleaning_log` downloads return `null`** — no generator
+   functions exist (`report_adapter.py`). The frontend renders them as "Unavailable".
+   Not a wiring bug; the generators were never written.
+2. **Per-node timing metrics not persisted.** `metadata.processing_metrics` is `{}`.
+   `PipelineContext.timed()` exists but the graph doesn't record stage timings into the
+   stored report. (`overview.py` reads `total_time` off a fresh context → 0.0.)
+3. **`PipelineContext` is post-hoc only.** It is NOT the single-source-of-truth profile
+   carrier the old docstrings implied — see §4c. Each graph node still calls
+   `profile_csv()` where it needs to (twice total: original in `profiler_node`, cleaned
+   in `ml_recommendation_node`). This is correct and not a bug — just don't document it
+   as a threaded context.
+
+## 8. Verification Protocol (required before claiming any fix "done")
+
+Per longstanding user policy: **never claim "done"/"verified"/"it compiles" without
+pasting real runtime output.** For this repo specifically:
+
+- Backend logic: `cd backend && PYTHONPATH=. python tests/test_regressions.py`
+  (manual runner; pytest isn't installed in the venv). Must show `N/N passed`.
+- Backend imports: `PYTHONPATH=. venv/Scripts/python.exe -c "import app.api.routes, app.agents.graph"`.
+- Frontend types: `cd frontend && npx --no-install tsc --noEmit` (exit 0).
+- Behavior changes to cleaning/profiling must be proven against
+  `classification_dataset.csv`, `sample_with_nan.csv`, a no-target dataset, and (for
+  ragged/large files) a banner-preamble CSV — with output pasted, not summarized.
+
+## 9. Frontend Contract Notes
+
+`frontend/app/results/page.tsx` holds the Zod schema; `frontend/types/analysis.ts` the
+TS interfaces. Both currently match `report_adapter`'s output (readiness dimensions,
+ml/quality/before_after shapes verified field-for-field; `tsc --noEmit` clean). The
+invalid-dataset gate (`problem_type: "invalid"`), the cream/mustard/ink token set, the
+`safeResolveAssetUrl` allowlist (§6.5), and mock/real dual-mode are all present. **If you
+change `report_adapter`'s output shape, update both frontend files and re-run `tsc`** —
+the loose `dict[str, Any]` typing in `schemas.py` means FastAPI won't catch drift for you.
+
+---
+
+## Appendix: Original Build Spec (historical)
+
+The project was built in phases; the detailed original spec (profiler JSON shape,
+LangGraph state, LLM router contract, cleaner/visualizer/ml-recommender rules, error
+handling matrix, Docker/README requirements, and the "Known Bugs — Required Fixes"
+list) lives in **`CLAUDE_FIXES_AND_DESIGN.md`** and the git history. Those requirements
+still hold as design intent; the sections above record how they actually landed. The
+explicit exclusions from the original spec still stand: **no auth, no vector DBs, no
+multi-agent architectures, no MCP** — keep it simple and scalable.
+
+**Excluded / partially built:** Docker is incomplete — a `backend/Dockerfile` exists,
+but there is **no `frontend/Dockerfile` and no root `docker-compose.yml`**, so the
+Phase-7 "one-command `docker-compose up`" system does not exist; the project runs
+natively only. Also missing: the two download generators (§7.1) and per-node timing
+persistence (§7.2).
