@@ -5,6 +5,8 @@ pandas/numpy only. This profile is what gets sent to the LLM later in the
 pipeline -- the LLM never sees the raw dataset, only this summary.
 """
 
+import csv
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -29,9 +31,96 @@ _MAX_FREQUENCY_ENTRIES = 50
 # parseable token flipping a genuinely categorical column to datetime.
 _DATETIME_PARSE_THRESHOLD = 0.9
 
+# --- ragged-column detection thresholds (see _detect_ragged_columns) -----
+# How many raw data rows (after the header) to sample when checking whether
+# the header's field count matches the data's actual field count.
+_RAGGED_SAMPLE_ROWS = 20
+# A mismatch only counts as "ragged" (vs. a normal, harmless 1-field offset
+# from an implicit index column) when the data's field count is at least
+# this many times the header's field count...
+_RAGGED_RATIO_THRESHOLD = 2
+# ...AND the absolute difference is at least this large. Both conditions
+# must hold, so a routine off-by-one (index-column-shaped) file never
+# triggers this.
+_RAGGED_MIN_ABSOLUTE_DIFF = 2
+
 
 class ProfilerError(Exception):
     """Raised when a CSV cannot be read or profiled, with a clear reason."""
+
+
+def _detect_ragged_columns(file_path: Path, df: pd.DataFrame) -> None:
+    """Detect a header/data column-count mismatch pandas silently 'resolved'
+    instead of raising, and fail loudly with an actionable message instead.
+
+    BACKGROUND: `pd.read_csv` treats row 0 as the header by default. If a
+    stray non-data line precedes the real header (e.g. a comment/banner
+    line like "# This sample CSV file is provided by ...", not marked as a
+    comment since nothing in this pipeline passes `comment="#"`), that
+    stray line becomes a 1-field header while every subsequent line --
+    including the REAL header and every real data row -- has however many
+    comma-separated fields the actual data has (e.g. 10). Pandas resolves
+    this width mismatch via its "extra leading fields become an implicit
+    index, only the trailing field(s) matching the header's declared count
+    become the visible column(s)" heuristic. The result: a dataframe that
+    silently reports 1 column of (what looks like free text but is
+    actually) just the LAST field of a much wider dataset -- 9 of 10
+    columns and the true column names vanish with no error, and every
+    downstream stage (validation, LLM analysis, cleaning, ML
+    recommendation) proceeds against this corrupted view without any way
+    to know something went wrong.
+
+    This check samples the first `_RAGGED_SAMPLE_ROWS` raw data rows with
+    `csv.reader` (quote-aware, so it doesn't miscount commas inside quoted
+    text) and compares their typical field count to `df.shape[1]` (what
+    pandas actually parsed). A routine 1-field-off mismatch is common and
+    usually legitimate (pandas' standard "extra field is an unnamed index
+    column" convention) and is intentionally NOT flagged -- only a
+    mismatch that is both >= `_RAGGED_RATIO_THRESHOLD`x and
+    `_RAGGED_MIN_ABSOLUTE_DIFF` fields off raises, since that combination
+    is not explainable by the normal index-column convention.
+
+    Raises:
+        ProfilerError: if the sampled data rows consistently have far more
+            fields than the parsed header implies.
+    """
+    try:
+        with file_path.open("r", encoding="utf-8", errors="replace", newline="") as f:
+            reader = csv.reader(f)
+            try:
+                next(reader)  # the header row, as pandas saw it
+            except StopIteration:
+                return
+            sample_field_counts = []
+            for _ in range(_RAGGED_SAMPLE_ROWS):
+                try:
+                    row = next(reader)
+                except StopIteration:
+                    break
+                if row:
+                    sample_field_counts.append(len(row))
+    except OSError:
+        # If we can't even re-open the file for sampling, don't block the
+        # main read on this best-effort check -- the primary parse already
+        # succeeded, and other error paths already handle unreadable files.
+        return
+
+    if not sample_field_counts:
+        return
+
+    typical_fields = Counter(sample_field_counts).most_common(1)[0][0]
+    header_fields = df.shape[1]
+    if (
+        typical_fields > header_fields * _RAGGED_RATIO_THRESHOLD
+        and typical_fields - header_fields >= _RAGGED_MIN_ABSOLUTE_DIFF
+    ):
+        raise ProfilerError(
+            f"{file_path.name} looks malformed: the header implies {header_fields} "
+            f"column(s), but data rows consistently have {typical_fields} comma-"
+            "separated fields. This usually means there's a stray line (e.g. a "
+            "comment or banner) before the real header row. Please remove any "
+            "non-data lines before the header and re-upload."
+        )
 
 
 def _read_csv_with_fallback(file_path: Path) -> pd.DataFrame:
@@ -78,6 +167,13 @@ def _read_csv_with_fallback(file_path: Path) -> pd.DataFrame:
 
     if df.shape[1] == 0:
         raise ProfilerError(f"CSV file has no columns to parse: {file_path.name}")
+
+    # Catches the specific silent-corruption case where pandas' column count
+    # doesn't match what the data rows actually contain (see
+    # _detect_ragged_columns's docstring) -- must run before
+    # _fix_missing_header_if_needed, which has a narrower, different purpose
+    # (an all-numeric header) and would not catch this.
+    _detect_ragged_columns(file_path, df)
 
     _enforce_size_limits(df, file_path)
     df = _fix_missing_header_if_needed(df, file_path)

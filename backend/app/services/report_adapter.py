@@ -270,7 +270,14 @@ def build_results_response(file_id: str, data: dict[str, Any]) -> dict[str, Any]
             # the frontend's download-center cards render as "Unavailable"
             # instead of a broken link.
             "analysis_report": None,
-            "json_results": f"/results/{file_id}",
+            # Issue 5 fix: was "/results/{file_id}" -- a real endpoint, but
+            # NOT under the frontend's `safeResolveAssetUrl` allowlist
+            # (/charts/, /download/ only), so it always rendered as
+            # "Unavailable" despite this field having a real value. Routed
+            # through the new /download/json/{file_id} endpoint instead,
+            # which serves the same report data as a proper attachment
+            # download rather than the inline API response.
+            "json_results": f"/download/json/{file_id}",
             "cleaning_log": None,
         },
         "metadata": {

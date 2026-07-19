@@ -330,6 +330,32 @@ async def download_cleaned_csv(file_id: str) -> FileResponse:
     )
 
 
+@router.get("/download/json/{file_id}")
+async def download_json_results(file_id: str) -> FileResponse:
+    """Serve the stored report JSON as a real file download (Issue 5 fix).
+
+    `report_adapter.py`'s `downloads.json_results` used to point at
+    `/results/{file_id}` -- a real, working endpoint, but not under the
+    frontend's `/charts/`+`/download/` asset URL allowlist, so the
+    Download Center card always showed "Unavailable" despite the backend
+    having a real value. This serves the exact same on-disk report file
+    `/results/{file_id}` reads, just as a downloadable attachment under a
+    `/download/` path instead of an inline API response.
+    """
+    report_path = resolve_report_path(file_id)
+    if not report_path.exists():
+        raise APIError(
+            404,
+            "NOT_FOUND",
+            f"No results found for file_id='{file_id}'. Run /analyze first.",
+        )
+    return FileResponse(
+        report_path,
+        media_type="application/json",
+        filename=f"{file_id}_results.json",
+    )
+
+
 @router.get("/download/charts/{file_id}")
 async def download_charts_zip(file_id: str) -> StreamingResponse:
     """Zip every generated chart for this file_id and return it as a download.
