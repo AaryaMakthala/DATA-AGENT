@@ -15,12 +15,14 @@ from app.api.schemas import AnalyzeResponse, ResultsResponse, UploadResponse
 from app.services.csv_service import CSVServiceError, validate_and_preview
 from app.services.file_service import (
     FileServiceError,
+    InvalidFileIdError,
     UploadTooLargeError,
     chart_path_to_url,
     resolve_cleaned_file_path,
     resolve_report_path,
     resolve_upload_path,
     save_upload,
+    validate_file_id,
 )
 from app.services.report_adapter import build_results_response
 from app.tools.cleaner import CleanerError
@@ -43,6 +45,20 @@ _graph = build_graph()
 _rate_limiter = SlidingWindowRateLimiter(
     Config.RATE_LIMIT_WINDOW_SECONDS
 )
+
+
+def _require_valid_file_id(file_id: str) -> None:
+    """Reject path-traversal / unsafe file_id at the route boundary (HTTP 400).
+
+    The resolvers in file_service also validate defensively, but doing it here
+    means /download/charts (which globs the charts folder directly and never
+    calls a resolver) is covered too, and every rejection is a clean 400 rather
+    than a resolver error mapped to 404/500.
+    """
+    try:
+        validate_file_id(file_id)
+    except InvalidFileIdError as exc:
+        raise APIError(400, "INVALID_FILE_ID", str(exc)) from exc
 
 
 def _enforce_rate_limit(request: Request, bucket: str, max_requests: int) -> None:
@@ -195,6 +211,8 @@ async def analyze_csv(
         Config.RATE_LIMIT_ANALYZE_MAX,
     )
 
+    _require_valid_file_id(file_id)
+
     try:
         path = resolve_upload_path(file_id)
     except FileServiceError as exc:
@@ -277,6 +295,8 @@ async def analyze_csv(
 
 @router.get("/results/{file_id}", response_model=ResultsResponse)
 async def get_results(file_id: str) -> ResultsResponse:
+    _require_valid_file_id(file_id)
+
     report_path = resolve_report_path(file_id)
 
     if not report_path.exists():
@@ -318,6 +338,8 @@ async def get_results(file_id: str) -> ResultsResponse:
 
 @router.get("/download/{file_id}")
 async def download_cleaned_csv(file_id: str) -> FileResponse:
+    _require_valid_file_id(file_id)
+
     try:
         path = resolve_cleaned_file_path(file_id)
     except FileServiceError as exc:
@@ -342,6 +364,8 @@ async def download_json_results(file_id: str) -> FileResponse:
     `/results/{file_id}` reads, just as a downloadable attachment under a
     `/download/` path instead of an inline API response.
     """
+    _require_valid_file_id(file_id)
+
     report_path = resolve_report_path(file_id)
     if not report_path.exists():
         raise APIError(
@@ -367,6 +391,8 @@ async def download_charts_zip(file_id: str) -> StreamingResponse:
     filename (not the full path) for, so this stays consistent with how
     chart files are located everywhere else in the app.
     """
+    _require_valid_file_id(file_id)
+
     chart_paths = sorted(Config.CHARTS_FOLDER.glob(f"{file_id}_*.png"))
     if not chart_paths:
         raise APIError(

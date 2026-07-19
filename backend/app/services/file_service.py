@@ -4,6 +4,7 @@ Filesystem utilities for uploaded datasets and generated analysis artifacts.
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from pathlib import Path
@@ -17,6 +18,12 @@ logger = get_logger(__name__)
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024  # 1 MiB
 
+# A file_id is always a `uuid.uuid4().hex` string minted by `save_upload`
+# (32 lowercase hex chars). This allowlist pattern accepts that and any other
+# filename-safe token, while rejecting EVERYTHING that could escape an artifact
+# folder: "/", "\", ".", "..", and any other path separator or metacharacter.
+_VALID_FILE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+
 
 class FileServiceError(Exception):
     """Raised when a file operation fails."""
@@ -24,6 +31,30 @@ class FileServiceError(Exception):
 
 class UploadTooLargeError(FileServiceError):
     """Raised when the uploaded file exceeds MAX_UPLOAD_BYTES."""
+
+
+class InvalidFileIdError(FileServiceError):
+    """Raised when a file_id contains unsafe characters or path separators.
+
+    Security: file_id arrives untrusted from URL path params and is
+    interpolated into on-disk artifact paths. Without this guard,
+    `../../../../etc/passwd` (or the Windows `..\\..\\` form) escapes the
+    intended folder -- an arbitrary-read/write path-traversal vulnerability.
+    """
+
+
+def validate_file_id(file_id: str) -> str:
+    """Return `file_id` unchanged if it is safe; otherwise raise.
+
+    A safe file_id contains only letters, digits, underscore, and hyphen.
+    Any "/", "\\", ".", "..", whitespace, or other path separator is rejected.
+    """
+    if not file_id or not _VALID_FILE_ID.fullmatch(file_id):
+        raise InvalidFileIdError(
+            "Invalid file_id: only letters, numbers, '_' and '-' are allowed "
+            "(no path separators or '.')."
+        )
+    return file_id
 
 
 def save_upload(file: UploadFile) -> tuple[str, Path]:
@@ -104,6 +135,8 @@ def resolve_upload_path(file_id: str) -> Path:
     """
     Resolve an uploaded CSV path from its file_id.
     """
+    validate_file_id(file_id)
+
     path = Config.UPLOAD_FOLDER / f"{file_id}.csv"
 
     if not path.is_file():
@@ -118,6 +151,8 @@ def resolve_report_path(file_id: str) -> Path:
     """
     Return report JSON path.
     """
+    validate_file_id(file_id)
+
     return Config.REPORTS_FOLDER / f"{file_id}.json"
 
 
@@ -125,6 +160,8 @@ def resolve_cleaned_file_path(file_id: str) -> Path:
     """
     Resolve cleaned dataset path.
     """
+    validate_file_id(file_id)
+
     path = Config.CLEANED_FILES_FOLDER / f"{file_id}_cleaned.csv"
 
     if not path.is_file():

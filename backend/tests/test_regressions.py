@@ -32,6 +32,13 @@ import pandas as pd
 
 from app.tools.cleaner import clean_csv
 from app.tools.profiler import ProfilerError, load_dataframe, profile_csv
+from app.services.file_service import (
+    InvalidFileIdError,
+    validate_file_id,
+    resolve_report_path,
+    resolve_cleaned_file_path,
+    resolve_upload_path,
+)
 
 
 # --------------------------------------------------------------------------
@@ -247,6 +254,71 @@ def test_low_missingness_drop_still_drops_rows(tmp_path=None):
     )
 
 
+# --------------------------------------------------------------------------
+# Security: file_id path-traversal must be rejected before it reaches disk
+# --------------------------------------------------------------------------
+
+def test_path_traversal_file_id_is_rejected():
+    """A POSIX-style traversal file_id must raise InvalidFileIdError."""
+    try:
+        validate_file_id("../../../../etc/passwd")
+    except InvalidFileIdError:
+        return
+    raise AssertionError(
+        "validate_file_id('../../../../etc/passwd') must raise InvalidFileIdError"
+    )
+
+
+def test_windows_path_traversal_file_id_is_rejected():
+    """A Windows-style traversal file_id (backslashes) must be rejected."""
+    try:
+        validate_file_id("..\\..\\etc\\passwd")
+    except InvalidFileIdError:
+        return
+    raise AssertionError(
+        "validate_file_id('..\\\\..\\\\etc\\\\passwd') must raise InvalidFileIdError"
+    )
+
+
+def test_normal_file_ids_are_accepted():
+    """Legitimate uuid4-hex and filename-safe ids must pass unchanged."""
+    for good in (
+        "0123456789abcdef0123456789abcdef",  # uuid4().hex
+        "abc123",
+        "file_id-with_underscores-and-hyphens",
+    ):
+        assert validate_file_id(good) == good, f"{good!r} should be accepted"
+
+    # A representative bad set must all be rejected.
+    for bad in ("", "a/b", "a\\b", ".", "..", "a.b", "a b", "a;b", "../x"):
+        try:
+            validate_file_id(bad)
+        except InvalidFileIdError:
+            continue
+        raise AssertionError(f"{bad!r} should have been rejected")
+
+
+def test_resolvers_reject_traversal_file_id():
+    """The path resolvers themselves must refuse traversal ids (defense in depth).
+
+    Proves the fix holds even if a caller forgets the route-boundary guard --
+    the resolver never returns an escaping path.
+    """
+    for resolver in (
+        resolve_report_path,
+        resolve_cleaned_file_path,
+        resolve_upload_path,
+    ):
+        for bad in ("../../../../etc/passwd", "..\\..\\etc\\passwd"):
+            try:
+                resolver(bad)
+            except InvalidFileIdError:
+                continue
+            raise AssertionError(
+                f"{resolver.__name__}({bad!r}) must raise InvalidFileIdError"
+            )
+
+
 def _run_all():
     tests = [
         test_bug3_duplicate_invariant_holds_when_strategy_is_drop,
@@ -255,6 +327,10 @@ def _run_all():
         test_ragged_header_genuinely_corrupt_file_still_raises,
         test_high_missingness_drop_converts_to_column_drop,
         test_low_missingness_drop_still_drops_rows,
+        test_path_traversal_file_id_is_rejected,
+        test_windows_path_traversal_file_id_is_rejected,
+        test_normal_file_ids_are_accepted,
+        test_resolvers_reject_traversal_file_id,
     ]
     failures = 0
     for t in tests:
