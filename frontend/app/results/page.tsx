@@ -92,6 +92,7 @@ interface BeforeAfterRowVM {
   before: number | string;
   after: number | string;
   difference: string;
+  informational?: boolean;
 }
 
 interface TimelineItemVM {
@@ -298,6 +299,7 @@ const beforeAfterRowSchema = z.object({
   before: z.union([z.number(), z.string()]),
   after: z.union([z.number(), z.string()]),
   difference: z.string(),
+  informational: z.boolean().nullish().transform((v) => v ?? undefined),
 });
 
 const beforeAfterSchema = z
@@ -519,6 +521,15 @@ function statusColor(score: number): string {
 
 function severityColor(severity: string): string {
   return severity.toLowerCase() === "high" ? "#c05a44" : "#f4c542";
+}
+
+// Format a processing duration for display. Sub-second runs show "<1s" rather
+// than the misleading "0s" a plain integer/round produces on fast or
+// coarse-grained timings; everything else shows the second value normally.
+function formatDuration(seconds: number): string {
+  if (seconds <= 0) return "<1s";
+  if (seconds < 1) return "<1s";
+  return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)}s`;
 }
 
 // ------------------------------ mock view-model -----------------------------
@@ -1099,7 +1110,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
             <StatCell label="Target" value={vm.overview.detectedTarget ?? "—"} />
             <StatCell label="Problem Type" value={vm.overview.problemType ? cap(vm.overview.problemType) : undefined} />
             <StatCell label="Status" value={vm.overview.processingStatus} />
-            <StatCell label="Processing Time" value={vm.overview.processingTimeSeconds !== undefined ? `${vm.overview.processingTimeSeconds}s` : undefined} />
+            <StatCell label="Processing Time" value={vm.overview.processingTimeSeconds !== undefined ? formatDuration(vm.overview.processingTimeSeconds) : undefined} />
           </div>
         </div>
       )}
@@ -1208,6 +1219,10 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       {vm.beforeAfter && vm.beforeAfter.length > 0 && (
         <>
           <SectionHeading>Before vs. After Cleaning</SectionHeading>
+          <p className="mt-2 text-xs text-muted">
+            Outlier counts are independent IQR detections on each dataset — a different
+            &ldquo;after&rdquo; count reflects re-measurement on the cleaned data, not damage from cleaning.
+          </p>
           <div className="card-elevated mt-5 overflow-x-auto p-2">
             <table className="w-full min-w-[480px] text-left text-xs">
               <thead>
@@ -1224,7 +1239,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
                     <td className="px-4 py-3 font-bold text-ink">{r.metric}</td>
                     <td className="px-4 py-3 text-ink">{r.before}</td>
                     <td className="px-4 py-3 text-ink">{r.after}</td>
-                    <td className="px-4 py-3" style={{ color: String(r.difference).startsWith("-") ? "#3f9d54" : r.difference === "0" ? undefined : "#c05a44" }}>{r.difference}</td>
+                    <td className="px-4 py-3" style={{ color: r.informational ? undefined : String(r.difference).startsWith("-") ? "#3f9d54" : r.difference === "0" ? undefined : "#c05a44" }}>{r.difference}</td>
                   </tr>
                 ))}
               </tbody>

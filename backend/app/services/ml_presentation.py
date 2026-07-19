@@ -47,17 +47,36 @@ _DISADVANTAGES = {
 }
 
 
+def _reference_key(model_name: str) -> str:
+    """Map a ranked model's display name to its reference-data key.
+
+    The regression ranker emits task-suffixed names ("XGBoost Regressor",
+    "Gradient Boosting Regressor", "Random Forest Regressor", ...), but the
+    static reference tables below are keyed by the base family name
+    ("XGBoost", "Gradient Boosting", ...). Without this normalization every
+    regression card except "Linear Regression" (which has no suffix and
+    matched by luck) fell back to `{}` / `[]`, so it rendered with no specs
+    and no pros/cons -- and the only fully-populated card, Linear Regression,
+    made every model look like it had Linear Regression's properties.
+    Stripping the trailing " Regressor" recovers the correct family profile.
+    """
+    if model_name.endswith(" Regressor"):
+        return model_name[: -len(" Regressor")]
+    return model_name
+
+
 def build_model_cards(ranked_models: list[dict[str, str]]) -> list[dict[str, Any]]:
     """§15: enrich each ranked model with its static reference profile."""
     cards = []
     for m in ranked_models:
-        profile = _MODEL_PROFILES.get(m["name"], {})
+        key = _reference_key(m["name"])
+        profile = _MODEL_PROFILES.get(key, {})
         cards.append({
             "model_name": m["name"],
             "confidence": m["confidence"],
             "reason": m["reason"],
-            "advantages": _ADVANTAGES.get(m["name"], []),
-            "disadvantages": _DISADVANTAGES.get(m["name"], []),
+            "advantages": _ADVANTAGES.get(key, []),
+            "disadvantages": _DISADVANTAGES.get(key, []),
             **profile,
         })
     return cards

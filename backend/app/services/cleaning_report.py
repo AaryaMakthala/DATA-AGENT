@@ -44,10 +44,17 @@ def build_cleaning_timeline(applied_plan: dict[str, Any]) -> list[dict[str, Any]
     """
     timeline: list[dict[str, Any]] = []
 
-    for col, reason in applied_plan.get("dropped_columns", {}).items():
+    # Columns physically removed from the frame. This includes identifier
+    # drops AND columns the cleaner's high-missingness safeguard dropped
+    # instead of deleting rows. The per-column `reason` already explains which
+    # case it was, so the label stays generic ("Dropped column") rather than
+    # asserting "identifier" for a column that was actually dropped for
+    # missingness.
+    dropped_columns = applied_plan.get("dropped_columns", {}) or {}
+    for col, reason in dropped_columns.items():
         timeline.append({
             "icon": "trash",
-            "action": f"Dropped identifier column '{col}'",
+            "action": f"Dropped column '{col}'",
             "reason": reason,
             "confidence": "High",
         })
@@ -55,6 +62,14 @@ def build_cleaning_timeline(applied_plan: dict[str, Any]) -> list[dict[str, Any]
     missing_plan = applied_plan.get("missing_values", {})
     if isinstance(missing_plan, dict):
         for col, raw in missing_plan.items():
+            # If this column was ultimately DROPPED (e.g. the high-missingness
+            # safeguard converted its "drop rows" strategy into a column drop),
+            # the missing-value action never ran against a surviving column --
+            # emitting "Dropped rows with missing values for 'Cabin'" right
+            # after "Dropped column 'Cabin'" is contradictory. Skip it so the
+            # timeline only shows what actually happened.
+            if col in dropped_columns:
+                continue
             action, reason, confidence = _strategy_and_reason(raw)
             if action not in _ACTION_LABELS:
                 continue
@@ -77,6 +92,8 @@ def build_cleaning_timeline(applied_plan: dict[str, Any]) -> list[dict[str, Any]
     outliers_plan = applied_plan.get("outliers", {})
     if isinstance(outliers_plan, dict):
         for col, raw in outliers_plan.items():
+            if col in dropped_columns:
+                continue
             action, reason, confidence = _strategy_and_reason(raw)
             if action not in ("cap", "remove"):
                 continue
@@ -90,6 +107,8 @@ def build_cleaning_timeline(applied_plan: dict[str, Any]) -> list[dict[str, Any]
     encoding_plan = applied_plan.get("encoding", {})
     if isinstance(encoding_plan, dict):
         for col, raw in encoding_plan.items():
+            if col in dropped_columns:
+                continue
             action, reason, confidence = _strategy_and_reason(raw)
             if action != "one_hot":
                 continue

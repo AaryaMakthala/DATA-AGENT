@@ -7,7 +7,7 @@ original phase-by-phase build spec is preserved at the bottom under "Appendix: O
 Build Spec" for historical context; the sections above it are authoritative.
 
 Last reconciled: 2026-07-19, against a full read of `backend/app/**` + `frontend/**`,
-with the regression suite (`backend/tests/test_regressions.py`, 6/6 passing) and a
+with the full pytest suite (`PYTHONPATH=. python -m pytest -q`, 47/47 passing) and a
 clean `tsc --noEmit` as runtime proof.
 
 ---
@@ -226,8 +226,12 @@ columns excluded from charts and ML reasoning.
 Per longstanding user policy: **never claim "done"/"verified"/"it compiles" without
 pasting real runtime output.** For this repo specifically:
 
-- Backend logic: `cd backend && PYTHONPATH=. python tests/test_regressions.py`
-  (manual runner; pytest isn't installed in the venv). Must show `N/N passed`.
+- Backend logic (full suite): `cd backend && PYTHONPATH=. python -m pytest -q`.
+  pytest **is** installed in the venv (9.1.1). Current suite: **47 tests passing**.
+  Must show `N passed` with a 0 exit code.
+- Backend logic (quick subset): `cd backend && PYTHONPATH=. python tests/test_regressions.py`
+  runs just the regression tests via a manual runner (no pytest needed). Handy for a
+  fast check, but the full `python -m pytest -q` above is the authoritative gate.
 - Backend imports: `PYTHONPATH=. venv/Scripts/python.exe -c "import app.api.routes, app.agents.graph"`.
 - Frontend types: `cd frontend && npx --no-install tsc --noEmit` (exit 0).
 - Behavior changes to cleaning/profiling must be proven against

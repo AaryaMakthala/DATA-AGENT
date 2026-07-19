@@ -115,7 +115,13 @@ def _build_comparison_table(r: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         {"metric": "Rows", "before": r["rows_before"], "after": r["rows_after"], "difference": diff(r["rows_before"], r["rows_after"])},
         {"metric": "Missing values", "before": r["missing_before"], "after": r["missing_after"], "difference": diff(r["missing_before"], r["missing_after"])},
-        {"metric": "Outliers", "before": r["outliers_before"], "after": r["outliers_after"], "difference": diff(r["outliers_before"], r["outliers_after"])},
+        # "Outliers Detected", not "Outliers": the before/after counts are two
+        # INDEPENDENT IQR detections -- run on the original frame, then re-run on
+        # the cleaned frame (whose fences shift once rows/values change). A
+        # higher "after" count does NOT mean cleaning created outliers; it's a
+        # fresh measurement. The `informational` flag tells the UI to render the
+        # delta neutrally instead of as a red "regression".
+        {"metric": "Outliers Detected", "before": r["outliers_before"], "after": r["outliers_after"], "difference": diff(r["outliers_before"], r["outliers_after"]), "informational": True},
         {"metric": "Duplicate rows removed", "before": r["duplicates_removed"], "after": 0, "difference": f"-{r['duplicates_removed']}"},
         {"metric": "Columns removed", "before": len(r["columns_removed"]), "after": 0, "difference": f"-{len(r['columns_removed'])}"},
         {"metric": "Columns encoded", "before": len(r["columns_encoded"]), "after": len(r["columns_encoded"]), "difference": "0"},
