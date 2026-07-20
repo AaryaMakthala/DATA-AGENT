@@ -15,6 +15,7 @@ from app.api.schemas import AnalyzeResponse, ResultsResponse, UploadResponse
 from app.services.before_after import compute_before_after
 from app.services.cleaning_report import build_cleaning_log_text
 from app.services.csv_service import CSVServiceError, validate_and_preview
+from app.services.executive_summary import build_analysis_report_text
 from app.services.file_service import (
     FileServiceError,
     InvalidFileIdError,
@@ -443,6 +444,55 @@ async def download_cleaning_log(file_id: str) -> StreamingResponse:
         buffer,
         media_type="text/plain",
         headers={"Content-Disposition": f'attachment; filename="{file_id}_cleaning_log.txt"'},
+    )
+
+
+@router.get("/download/report/{file_id}")
+async def download_analysis_report(file_id: str) -> StreamingResponse:
+    """Serve a plain-text analysis report built from the REAL stored analysis.
+
+    Previously the Download Center's "Analysis Report" card was always
+    "Unavailable" because no generator existed (CLAUDE.md §7.1). This builds
+    the report on demand from the same stored `report` (the LLM's structured
+    analysis), `recommendations` (the heuristic ML recommendation), `profile`,
+    and `quality_score` the results page already renders -- so it reflects
+    exactly what the pipeline produced, with nothing fabricated. Returns 404
+    when the report doesn't exist or has no analysis to render.
+    """
+    _require_valid_file_id(file_id)
+
+    report_path = resolve_report_path(file_id)
+    if not report_path.exists():
+        raise APIError(
+            404,
+            "NOT_FOUND",
+            f"No results found for file_id='{file_id}'. Run /analyze first.",
+        )
+    try:
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise APIError(500, "INTERNAL_ERROR", "Stored analysis results are corrupted.") from exc
+
+    report_raw = data.get("report")
+    if not report_raw:
+        raise APIError(
+            404,
+            "NOT_FOUND",
+            f"No analysis report available for file_id='{file_id}'.",
+        )
+
+    report_text = build_analysis_report_text(
+        file_id,
+        report_raw,
+        recommendations=data.get("recommendations"),
+        profile=data.get("profile"),
+        quality_score=data.get("quality_score"),
+    )
+    buffer = io.BytesIO(report_text.encode("utf-8"))
+    return StreamingResponse(
+        buffer,
+        media_type="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="{file_id}_analysis_report.txt"'},
     )
 
 

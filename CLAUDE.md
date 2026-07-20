@@ -6,9 +6,22 @@ to become inaccurate, update the documentation after verifying the new behavior.
 original phase-by-phase build spec is preserved at the bottom under "Appendix: Original
 Build Spec" for historical context; the sections above it are authoritative.
 
-Last reconciled: 2026-07-19, against a full read of `backend/app/**` + `frontend/**`,
-with the full pytest suite (`PYTHONPATH=. python -m pytest -q`, 47/47 passing) and a
-clean `tsc --noEmit` as runtime proof.
+Last reconciled: 2026-07-20, against a full read of `backend/app/**` + `frontend/**`,
+with the full pytest suite (`PYTHONPATH=. venv/Scripts/python.exe -m pytest -q`,
+**55/55 passing** — re-verified 2026-07-20) and a clean `tsc --noEmit` as runtime proof.
+
+2026-07-20 session confirmations (do not re-derive next session):
+- §6.7 (one-hot-encoded columns mislabeled as "removed" in Before/After) — fix confirmed
+  in place and covered by tests in `tests/test_presentation_polish.py`.
+- Identifier-exclusion audit item — confirmed CLOSED. The threshold in `cleaner.py`
+  correctly excludes high-cardinality identifier columns (e.g. Titanic `Cabin`, `Ticket`)
+  from ML reasoning/charts; the threshold was deliberately left as-is after review, not a
+  bug. No change needed — leaving the threshold alone was the correct tradeoff.
+- Remaining §7 open items are UNCHANGED and still open (worked next session, one at a
+  time, in this order): (1) `analysis_report` download generator returns `null` — no
+  generator function exists; (2) per-node timing metrics not persisted
+  (`metadata.processing_metrics` is `{}`; `PipelineContext.timed()` exists but is not
+  wired into `graph.py`).
 
 ---
 
@@ -226,12 +239,59 @@ out of `columns_encoded`. Covered by `test_encoded_column_is_encoded_not_removed
 
 ## 7. Open Items / Known Gaps (confirmed still open)
 
-1. **`analysis_report` and `cleaning_log` downloads return `null`** — no generator
-   functions exist (`report_adapter.py`). The frontend renders them as "Unavailable".
-   Not a wiring bug; the generators were never written.
-2. **Per-node timing metrics not persisted.** `metadata.processing_metrics` is `{}`.
-   `PipelineContext.timed()` exists but the graph doesn't record stage timings into the
-   stored report. (`overview.py` reads `total_time` off a fresh context → 0.0.)
+1. **`analysis_report` download — FIXED 2026-07-20.** Now served by
+   `download_analysis_report` (`routes.py`, `GET /download/report/{file_id}`), backed by
+   `build_analysis_report_text` in `services/executive_summary.py`. It renders a
+   plain-text report on demand from the already-stored `report` (the LLM's structured
+   analysis: overview/key_findings/risks/recommendations), `recommendations` (heuristic
+   ML ranking), `profile` shape, and `quality_score` — nothing fabricated; reuses
+   `format_executive_summary` so it inherits the structured/fallback handling.
+   `report_adapter.py`'s `downloads.analysis_report` points at the endpoint when a
+   `report` exists (null only for invalid datasets that never reached the LLM). Verified
+   end-to-end against `Titanic-Dataset.csv`: `/results` returned a real
+   `/download/report/<id>` URL and the download returned HTTP 200, `text/plain`
+   attachment, 3318 bytes of real content. The `cleaning_log` download was already real
+   (`download_cleaning_log`) from a prior session. Both frontend download cards resolve
+   via the `safeResolveAssetUrl` `/download/` allowlist; `tsc --noEmit` clean.
+2. **Per-node timing metrics — FIXED 2026-07-20.** `metadata.processing_metrics` now
+   carries real per-node timings instead of `{}`. Wiring (no second timing system, no
+   PipelineContext threading — §7.3 stays intact): (a) the existing `log_duration`
+   helper (`utils/logger.py`) gained optional `sink`/`key` args so it records elapsed
+   seconds into a dict in addition to logging; (b) each graph node in `agents/graph.py`
+   passes a per-node `metrics` dict and returns `{"processing_metrics": metrics}` for its
+   own stage (keys `profiling`, `target_detection`, `validation`, `analyzing`, `cleaning`,
+   `generating_charts`, `cleaning_profile`, `recommending_models` — matching the
+   frontend's `METRIC_LABELS`);
+   (c) `AnalystState.processing_metrics` is `Annotated[dict, merge_processing_metrics]` —
+   a reducer (`agents/state.py`) that accumulates each node's stage instead of the
+   default overwrite-on-return, so all stages survive into the persisted report;
+   (d) `report_adapter.py` loads the persisted dict onto `ctx.timings` as `StageTiming`
+   and uses the existing `ctx.timings_as_dict()` to emit `metadata.processing_metrics`
+   (which appends a derived `total_time`) — the same `ctx` `overview.py` already reads
+   `total_time` off, so `overview.processing_time_seconds` now shows the real total too.
+   Older stored reports (no `processing_metrics` key) still yield `{}`.
+
+   **Extended 2026-07-20 (2nd pass):** a skeptical audit found `total_time` was the sum
+   of only the *heavy* nodes — `target_detection_node` was timed log-only (no sink) and
+   `validation_node` wasn't timed at all — so `total_time` /
+   `overview.processing_time_seconds` slightly understated true end-to-end. Both nodes do
+   real, file-size-dependent work (each calls `load_dataframe()` = a full CSV reload plus
+   detection/validation), so that gap is genuine wall-clock, not a rounding artifact. Fix
+   used the same infrastructure (no new timing system, no PipelineContext threading):
+   wrapped each node's body in `log_duration(logger, "...", metrics, "<stage>")` with
+   stage keys `target_detection` / `validation` and returned `{"processing_metrics":
+   metrics}`; the existing reducer accumulates them. Added matching `METRIC_LABELS`
+   entries ("Target Detection", "Validation") in the frontend — functionally optional
+   since `page.tsx:902` already falls back to the raw key (`METRIC_LABELS[key] ?? key`)
+   and the Zod schema is `z.record(z.number())`, so unknown keys never break rendering.
+   Verified end-to-end against `Titanic-Dataset.csv`: `/results` returned all 8 stages
+   `{"profiling":0.1054,"target_detection":0.0134,"validation":0.0104,"analyzing":2.0003,`
+   `"cleaning":0.0721,"generating_charts":1.5538,"cleaning_profile":0.0668,`
+   `"recommending_models":0.0071,"total_time":3.8293}`, sum of the 8 stages == `total_time`
+   == `overview.processing_time_seconds` (3.8293, exact). Backward compat re-verified (old
+   report with no key → `{}` / `0`). Invalid-dataset path now persists its 3 pre-END
+   stages (`profiling`/`target_detection`/`validation`, summing to `total_time`) instead
+   of profiling only. Full suite **55 passed**; `tsc --noEmit` clean.
 3. **`PipelineContext` is post-hoc only.** It is NOT the single-source-of-truth profile
    carrier the old docstrings implied — see §4c. Each graph node still calls
    `profile_csv()` where it needs to (twice total: original in `profiler_node`, cleaned

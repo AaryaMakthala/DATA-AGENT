@@ -81,7 +81,7 @@ from app.services.ml_presentation import (
     build_why_not_others,
 )
 from app.services.overview import build_dataset_health, build_dataset_overview
-from app.services.pipeline_context import PipelineContext
+from app.services.pipeline_context import PipelineContext, StageTiming
 from app.services.quality_presentation import (
     build_quality_dashboard,
     build_quality_issue_cards,
@@ -201,6 +201,18 @@ def build_results_response(file_id: str, data: dict[str, Any]) -> dict[str, Any]
     # profile_original per the fix above.
     ctx.cleaned_profile = profile_after or profile_original
 
+    # Load the real per-node timings the graph persisted into state
+    # (state["processing_metrics"], accumulated via the merge_processing_metrics
+    # reducer) onto ctx.timings, so the existing PipelineContext.timings_as_dict()
+    # mechanism produces both metadata.processing_metrics below AND the real
+    # total_time overview.py reads off ctx -- instead of the empty timings list
+    # that made both read 0.0/{}.
+    stored_metrics = data.get("processing_metrics") or {}
+    ctx.timings = [
+        StageTiming(stage=stage, seconds=float(seconds))
+        for stage, seconds in stored_metrics.items()
+    ]
+
     # --- quality: reuse the already-computed score rather than recompute,
     # so this can never drift from what the graph actually produced. Only
     # fall back to computing it here if it's missing from the stored report.
@@ -271,10 +283,11 @@ def build_results_response(file_id: str, data: dict[str, Any]) -> dict[str, Any]
             "cleaned_csv": f"/download/{file_id}" if data.get("cleaned_file") else None,
             # charts_zip is now real -- see routes.py's download_charts_zip.
             "charts_zip": f"/download/charts/{file_id}" if chart_manifest else None,
-            # These two still don't have generator functions -- left null so
-            # the frontend's download-center cards render as "Unavailable"
-            # instead of a broken link.
-            "analysis_report": None,
+            # analysis_report is now real -- see routes.py's
+            # download_analysis_report. Built on demand from the stored `report`
+            # (LLM analysis) + `recommendations`; null only when no analysis was
+            # produced (e.g. an invalid dataset that never reached the LLM).
+            "analysis_report": f"/download/report/{file_id}" if report_raw else None,
             # Issue 5 fix: was "/results/{file_id}" -- a real endpoint, but
             # NOT under the frontend's `safeResolveAssetUrl` allowlist
             # (/charts/, /download/ only), so it always rendered as
@@ -289,12 +302,12 @@ def build_results_response(file_id: str, data: dict[str, Any]) -> dict[str, Any]
         "metadata": {
             "row_count": ctx.row_count,
             "column_count": ctx.column_count,
-            # Per-stage timings aren't captured by the current graph state.
-            # Wiring real numbers here requires timing each node in
-            # agents/graph.py (see PipelineContext.timed() in
-            # app/services/pipeline_context.py for a ready-made helper) and
-            # adding the result to the stored report dict.
-            "processing_metrics": {},
+            # Real per-node timings, persisted by the graph into
+            # state["processing_metrics"] and loaded onto ctx.timings above.
+            # timings_as_dict() returns {<stage>: seconds, ..., "total_time":
+            # sum}. Empty {} only for reports written before the graph started
+            # persisting timings (older stored reports have no key).
+            "processing_metrics": ctx.timings_as_dict() if stored_metrics else {},
         },
     }
 

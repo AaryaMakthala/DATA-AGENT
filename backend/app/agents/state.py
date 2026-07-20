@@ -1,6 +1,23 @@
 """Shared state object threaded through the LangGraph workflow."""
 
-from typing import Any, Optional, TypedDict
+from typing import Annotated, Any, Optional, TypedDict
+
+
+def merge_processing_metrics(
+    left: Optional[dict[str, float]],
+    right: Optional[dict[str, float]],
+) -> dict[str, float]:
+    """Reducer: accumulate per-node timings as each node returns.
+
+    Each node returns `{"processing_metrics": {<stage>: <seconds>}}` for just
+    its own stage. Without a reducer, LangGraph would overwrite the whole dict
+    on every node return, leaving only the last node's timing. This merges the
+    incremental per-node dicts into one accumulated `{stage: seconds}` map.
+    """
+    merged: dict[str, float] = dict(left) if left else {}
+    if right:
+        merged.update(right)
+    return merged
 
 
 class AnalystState(TypedDict, total=False):
@@ -39,3 +56,11 @@ class AnalystState(TypedDict, total=False):
     # meaning real before/after cleaning comparisons were impossible from
     # the stored report. This field is what unlocks that.
     cleaned_profile: Optional[dict[str, Any]]
+
+    # Per-node execution timings in seconds, keyed by stage name (e.g.
+    # {"profiling": 0.41, "analyzing": 1.63, ...}). Each node returns only its
+    # own stage; the `merge_processing_metrics` reducer accumulates them across
+    # nodes instead of the default overwrite-on-return behavior. Persisted into
+    # the stored report and surfaced as `metadata.processing_metrics` by
+    # report_adapter.py (which adds a derived `total_time`).
+    processing_metrics: Annotated[dict[str, float], merge_processing_metrics]

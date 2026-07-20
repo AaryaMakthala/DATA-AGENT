@@ -746,6 +746,8 @@ function topCorrelations(
 
 const METRIC_LABELS: Record<string, string> = {
   profiling: "Profiling",
+  target_detection: "Target Detection",
+  validation: "Validation",
   analyzing: "LLM Analysis",
   cleaning: "Cleaning",
   cleaning_profile: "Cleaning Profile",

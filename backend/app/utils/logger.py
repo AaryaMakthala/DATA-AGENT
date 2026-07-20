@@ -42,7 +42,12 @@ def get_logger(name: str) -> logging.Logger:
 
 
 @contextmanager
-def log_duration(logger: logging.Logger, step: str) -> Iterator[None]:
+def log_duration(
+    logger: logging.Logger,
+    step: str,
+    sink: "dict[str, float] | None" = None,
+    key: "str | None" = None,
+) -> Iterator[None]:
     """Time a block of work and log how long it took, in seconds.
 
     Emits `TIMING | <step> took N.NNNs` at INFO on normal exit, so the
@@ -54,6 +59,11 @@ def log_duration(logger: logging.Logger, step: str) -> Iterator[None]:
     Args:
         logger: The logger to emit the timing line on.
         step: Human-readable name of the step being timed.
+        sink: Optional dict to record the elapsed seconds into, so callers
+            (e.g. graph nodes persisting per-node timings into state) can
+            capture the number instead of only logging it. Recorded only on
+            successful completion, not when the block raises.
+        key: Key to use when writing into `sink` (defaults to `step`).
     """
     start = time.perf_counter()
     try:
@@ -65,3 +75,5 @@ def log_duration(logger: logging.Logger, step: str) -> Iterator[None]:
     else:
         elapsed = time.perf_counter() - start
         logger.info("TIMING | %s took %.3fs", step, elapsed)
+        if sink is not None:
+            sink[key or step] = round(elapsed, 4)

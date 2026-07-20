@@ -99,13 +99,14 @@ def profiler_node(state: AnalystState) -> dict:
     """
     logger.info("Graph: running profiler node for %s", state["file_path"])
     file_id = state.get("file_id") or uuid.uuid4().hex
+    metrics: dict[str, float] = {}
     try:
-        with log_duration(logger, "profiler_node"):
+        with log_duration(logger, "profiler_node", metrics, "profiling"):
             profile = profile_csv(state["file_path"])
     except ProfilerError as exc:
         logger.error("Graph: profiler node failed: %s", exc)
         raise
-    return {"profile": profile, "file_id": file_id}
+    return {"profile": profile, "file_id": file_id, "processing_metrics": metrics}
 
 
 def target_detection_node(state: AnalystState) -> dict:
@@ -116,23 +117,26 @@ def target_detection_node(state: AnalystState) -> dict:
     dummy column like 'Department_Marketing' getting picked as the target).
     """
     logger.info("Graph: running target detection node for %s", state["file_path"])
-    try:
-        with log_duration(logger, "target_detection_node.load_csv"):
-            df = load_dataframe(state["file_path"])
-    except ProfilerError as exc:
-        logger.error("Graph: target detection node failed to load CSV: %s", exc)
-        raise
-    with log_duration(logger, "target_detection_node.detect"):
-        target_column, target_reasoning, possible_targets = detect_target_column(df)
-        identifier_columns = detect_identifier_columns(df, target_column)
-    logger.info("Graph: detected target_column=%s -- %s", target_column, target_reasoning)
-    if identifier_columns:
-        logger.info("Graph: detected identifier columns (excluded from charts/features): %s", identifier_columns)
+    metrics: dict[str, float] = {}
+    with log_duration(logger, "target_detection_node", metrics, "target_detection"):
+        try:
+            with log_duration(logger, "target_detection_node.load_csv"):
+                df = load_dataframe(state["file_path"])
+        except ProfilerError as exc:
+            logger.error("Graph: target detection node failed to load CSV: %s", exc)
+            raise
+        with log_duration(logger, "target_detection_node.detect"):
+            target_column, target_reasoning, possible_targets = detect_target_column(df)
+            identifier_columns = detect_identifier_columns(df, target_column)
+        logger.info("Graph: detected target_column=%s -- %s", target_column, target_reasoning)
+        if identifier_columns:
+            logger.info("Graph: detected identifier columns (excluded from charts/features): %s", identifier_columns)
     return {
         "target_column": target_column,
         "target_reasoning": target_reasoning,
         "possible_targets": possible_targets,
         "identifier_columns": identifier_columns,
+        "processing_metrics": metrics,
     }
 
 
@@ -144,17 +148,19 @@ def validation_node(state: AnalystState) -> dict:
     cleaning, visualization, ML recommendation) never run.
     """
     logger.info("Graph: running validation node")
-    try:
-        df = load_dataframe(state["file_path"])
-    except ProfilerError as exc:
-        logger.error("Graph: validation node failed to load CSV: %s", exc)
-        raise
-    data_validity = validate_dataset(
-        df,
-        state.get("target_column"),
-        state.get("identifier_columns"),
-    )
-    return {"data_validity": data_validity}
+    metrics: dict[str, float] = {}
+    with log_duration(logger, "validation_node", metrics, "validation"):
+        try:
+            df = load_dataframe(state["file_path"])
+        except ProfilerError as exc:
+            logger.error("Graph: validation node failed to load CSV: %s", exc)
+            raise
+        data_validity = validate_dataset(
+            df,
+            state.get("target_column"),
+            state.get("identifier_columns"),
+        )
+    return {"data_validity": data_validity, "processing_metrics": metrics}
 
 
 def _route_after_validation(state: AnalystState) -> str:
@@ -228,7 +234,8 @@ def llm_nodes(state: AnalystState) -> dict:
     """
     logger.info("Graph: running LLM nodes (analysis + cleaning plan) in parallel")
     profile = state["profile"]
-    with log_duration(logger, "llm_nodes parallel block (analysis + cleaning plan)"):
+    metrics: dict[str, float] = {}
+    with log_duration(logger, "llm_nodes parallel block (analysis + cleaning plan)", metrics, "analyzing"):
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="llm-node"
         ) as pool:
@@ -254,7 +261,7 @@ def llm_nodes(state: AnalystState) -> dict:
             report = analysis_future.result()
             cleaning_plan = cleaning_future.result()
 
-    return {"report": report, "cleaning_plan": cleaning_plan}
+    return {"report": report, "cleaning_plan": cleaning_plan, "processing_metrics": metrics}
 
 
 def python_cleaning_node(state: AnalystState) -> dict:
@@ -272,8 +279,9 @@ def python_cleaning_node(state: AnalystState) -> dict:
     """
     logger.info("Graph: running Python cleaning node")
     file_id = state["file_id"]
+    metrics: dict[str, float] = {}
     try:
-        with log_duration(logger, "python_cleaning_node"):
+        with log_duration(logger, "python_cleaning_node", metrics, "cleaning"):
             cleaned_file, applied_plan, viz_file = clean_csv(
                 state["file_path"],
                 state.get("cleaning_plan"),
@@ -284,7 +292,7 @@ def python_cleaning_node(state: AnalystState) -> dict:
     except CleanerError as exc:
         logger.error("Graph: Python cleaning node failed: %s", exc)
         raise
-    return {"cleaned_file": cleaned_file, "cleaning_plan": applied_plan, "viz_file": viz_file}
+    return {"cleaned_file": cleaned_file, "cleaning_plan": applied_plan, "viz_file": viz_file, "processing_metrics": metrics}
 
 
 def visualization_node(state: AnalystState) -> dict:
@@ -309,13 +317,14 @@ def visualization_node(state: AnalystState) -> dict:
     logger.info("Graph: running visualization node")
     file_id = state["file_id"]
     viz_source = state.get("viz_file") or state["cleaned_file"]
+    metrics: dict[str, float] = {}
     try:
-        with log_duration(logger, "visualization_node (chart generation)"):
+        with log_duration(logger, "visualization_node (chart generation)", metrics, "generating_charts"):
             charts = generate_charts(viz_source, file_id)
     except VisualizerError as exc:
         logger.error("Graph: visualization node failed: %s", exc)
         raise
-    return {"charts": charts}
+    return {"charts": charts, "processing_metrics": metrics}
 
 
 def ml_recommendation_node(state: AnalystState) -> dict:
@@ -339,35 +348,40 @@ def ml_recommendation_node(state: AnalystState) -> dict:
     instead of omitting that section entirely.
     """
     logger.info("Graph: running ML recommendation node")
+    metrics: dict[str, float] = {}
     try:
-        with log_duration(logger, "ml_recommendation_node.reprofile"):
+        with log_duration(logger, "ml_recommendation_node.reprofile", metrics, "cleaning_profile"):
             cleaned_profile = profile_csv(state["cleaned_file"])
-        with log_duration(logger, "ml_recommendation_node.recommend"):
-            recommendations = recommend_algorithms(
-                state["cleaned_file"],
-                cleaned_profile,
-                state.get("target_column"),
-                state.get("target_reasoning") or "",
-                state.get("identifier_columns"),
-                state.get("possible_targets"),
-            )
+        with log_duration(logger, "ml_recommendation_node (recommend + quality)", metrics, "recommending_models"):
+            with log_duration(logger, "ml_recommendation_node.recommend"):
+                recommendations = recommend_algorithms(
+                    state["cleaned_file"],
+                    cleaned_profile,
+                    state.get("target_column"),
+                    state.get("target_reasoning") or "",
+                    state.get("identifier_columns"),
+                    state.get("possible_targets"),
+                )
+            # Data quality score is computed from the cleaned profile plus the
+            # detected target/problem type -- deterministic Python, no LLM (see
+            # data_quality.py). Timed inside the recommending_models block so
+            # its cost is reflected in that stage's persisted metric.
+            with log_duration(logger, "ml_recommendation_node.quality_score"):
+                quality = compute_quality_score(
+                    cleaned_profile,
+                    state.get("target_column"),
+                    recommendations.get("problem_type"),
+                    state.get("identifier_columns"),
+                )
     except (ProfilerError, MLRecommenderError) as exc:
         logger.error("Graph: ML recommendation node failed: %s", exc)
         raise
 
-    # Data quality score is computed from the cleaned profile plus the detected
-    # target/problem type -- deterministic Python, no LLM (see data_quality.py).
-    with log_duration(logger, "ml_recommendation_node.quality_score"):
-        quality = compute_quality_score(
-            cleaned_profile,
-            state.get("target_column"),
-            recommendations.get("problem_type"),
-            state.get("identifier_columns"),
-        )
     return {
         "recommendations": recommendations,
         "quality_score": quality,
         "cleaned_profile": cleaned_profile,
+        "processing_metrics": metrics,
     }
 
 
