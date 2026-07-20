@@ -151,6 +151,62 @@ def test_dropped_column_label_is_generic_not_identifier():
     assert "identifier" not in timeline[0]["action"].lower()
 
 
+# --------------------------------------------------------------------------
+# Fix 4: one-hot-encoded columns are reported as encoded, never as removed
+# --------------------------------------------------------------------------
+
+def test_encoded_column_is_encoded_not_removed():
+    """The Titanic Sex/Embarked case: a one-hot-encoded column vanishes from the
+    cleaned profile (replaced by dummies), but must be reported under
+    columns_encoded, NEVER as a removed column. The plan stores the action as a
+    dict ({"action": "one_hot", ...}), which a bare == "one_hot" check missed."""
+    before = {
+        "shape": {"rows": 100, "columns": 2},
+        "columns": {"Sex": {}, "Age": {}},
+        "duplicates": 0, "missing_values": {}, "outliers": {},
+    }
+    after = {
+        # Sex -> Sex_male/Sex_female; the literal "Sex" is gone.
+        "shape": {"rows": 100, "columns": 3},
+        "columns": {"Age": {}, "Sex_male": {}, "Sex_female": {}},
+        "duplicates": 0, "missing_values": {}, "outliers": {},
+    }
+    ctx = _ctx(before, after)
+    applied_plan = {
+        "encoding": {"Sex": {"action": "one_hot", "reason": "2 unique values"}},
+    }
+    result = compute_before_after(ctx, applied_plan)
+
+    assert result["columns_encoded"] == ["Sex"]
+    assert "Sex" not in result["columns_removed"]
+    assert result["columns_removed"] == []
+
+
+def test_skipped_encode_is_not_counted_as_encoded():
+    """A column the cleaner declined to one-hot encode (high cardinality) is
+    rewritten to a skipped-label string, not "one_hot", so it must stay out of
+    columns_encoded. It also never left the cleaned profile, so it isn't
+    removed either."""
+    before = {
+        "shape": {"rows": 100, "columns": 2},
+        "columns": {"Ticket": {}, "Age": {}},
+        "duplicates": 0, "missing_values": {}, "outliers": {},
+    }
+    after = {
+        "shape": {"rows": 100, "columns": 2},
+        "columns": {"Ticket": {}, "Age": {}},
+        "duplicates": 0, "missing_values": {}, "outliers": {},
+    }
+    ctx = _ctx(before, after)
+    applied_plan = {
+        "encoding": {"Ticket": "skipped - column left un-encoded (high cardinality)"},
+    }
+    result = compute_before_after(ctx, applied_plan)
+
+    assert result["columns_encoded"] == []
+    assert "Ticket" not in result["columns_removed"]
+
+
 if __name__ == "__main__":
     import sys
 

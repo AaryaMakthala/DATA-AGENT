@@ -189,3 +189,61 @@ def build_cleaning_summary(
             for s in ("missing_values", "outliers", "encoding")
         ) + (1 if _strategy_and_reason(applied_plan.get("duplicates"))[0] == "drop" else 0),
     }
+
+
+def build_cleaning_log_text(
+    file_id: str,
+    applied_plan: dict[str, Any],
+    before_after: Optional[dict[str, Any]] = None,
+) -> str:
+    """Render a plain-text cleaning log from what the cleaner ACTUALLY did.
+
+    Built entirely from the real `applied_plan` (the executed plan the cleaner
+    returns, with skipped/target-protected actions already rewritten) plus the
+    optional before/after summary -- nothing here is fabricated. This is the
+    downloadable counterpart to the on-screen Cleaning Timeline (audit item #6:
+    the Cleaning Log download was previously null because no generator existed).
+
+    Uses `build_cleaning_timeline`, so it inherits every accuracy guarantee of
+    the timeline: no action appears that didn't run, no duplicate/contradictory
+    entries, confidence reflects execution certainty.
+    """
+    timeline = build_cleaning_timeline(applied_plan)
+    lines: list[str] = []
+    lines.append("DATA CLEANING LOG")
+    lines.append("=" * 60)
+    lines.append(f"File ID: {file_id}")
+    lines.append("")
+
+    if before_after:
+        lines.append("SUMMARY")
+        lines.append("-" * 60)
+        lines.append(f"Rows:    {before_after.get('rows_before', '?')} -> {before_after.get('rows_after', '?')}")
+        lines.append(f"Missing values: {before_after.get('missing_before', '?')} -> {before_after.get('missing_after', '?')}")
+        removed = before_after.get("columns_removed") or []
+        if removed:
+            lines.append(f"Columns removed ({len(removed)}): {', '.join(removed)}")
+        encoded = before_after.get("columns_encoded") or []
+        if encoded:
+            lines.append(f"Columns one-hot encoded ({len(encoded)}): {', '.join(encoded)}")
+        lines.append(f"Values imputed: {before_after.get('values_imputed', 0)}")
+        lines.append("")
+
+    lines.append("ACTIONS APPLIED (in execution order)")
+    lines.append("-" * 60)
+    if timeline:
+        for i, entry in enumerate(timeline, start=1):
+            lines.append(f"{i}. {entry['action']}")
+            if entry.get("reason"):
+                lines.append(f"   Reason: {entry['reason']}")
+            lines.append(f"   Confidence: {entry.get('confidence', _DEFAULT_CONFIDENCE)}")
+            lines.append("")
+    else:
+        lines.append("No cleaning actions were applied to this dataset.")
+        lines.append("")
+
+    lines.append("Note: actions the AI proposed but the cleaner did not execute")
+    lines.append("(e.g. one-hot encoding a high-cardinality column, or the target")
+    lines.append("column which is always preserved) are intentionally omitted --")
+    lines.append("this log reflects only what actually changed in the data.")
+    return "\n".join(lines)

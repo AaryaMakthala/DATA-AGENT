@@ -261,6 +261,11 @@ def build_results_response(file_id: str, data: dict[str, Any]) -> dict[str, Any]
             "why_not_others": build_why_not_others(rec.get("ranked_models") or []),
             "readiness": build_model_readiness(rec),
             "warnings": rec.get("warnings") or [],
+            # Identifier columns dropped during cleaning. Surfaced so the
+            # frontend can exclude them from the Statistical Summary table --
+            # an ID/PassengerId column carries no modeling signal and should
+            # not be presented as a useful numeric feature (audit item #3).
+            "excluded_columns": identifier_columns,
         },
         "downloads": {
             "cleaned_csv": f"/download/{file_id}" if data.get("cleaned_file") else None,
@@ -278,7 +283,8 @@ def build_results_response(file_id: str, data: dict[str, Any]) -> dict[str, Any]
             # which serves the same report data as a proper attachment
             # download rather than the inline API response.
             "json_results": f"/download/json/{file_id}",
-            "cleaning_log": None,
+            # cleaning_log is now real -- see routes.py's download_cleaning_log.
+            "cleaning_log": f"/download/cleaning-log/{file_id}" if applied_plan else None,
         },
         "metadata": {
             "row_count": ctx.row_count,

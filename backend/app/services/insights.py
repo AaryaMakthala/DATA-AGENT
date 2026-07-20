@@ -1,6 +1,14 @@
 """§10 Dataset Insights cards -- each a small, self-contained fact pulled
 from the profile that already exists (`ctx.profile`), no recomputation of
 statistics pandas already gave us in `profiler.profile_csv`.
+
+Identifier columns (PassengerId, ID, Name, Email, Phone, Address, ...) are
+excluded from every insight: they are dropped during cleaning and carry no
+modeling signal, so surfacing "Most Unique Category: Name" or "Highest
+Variance Feature: ID" as a useful insight is misleading. `ctx.identifier_columns`
+(detected by `ml_recommender.detect_identifier_columns` on the ORIGINAL frame
+and threaded through the report) is the single source of truth for which
+columns to skip -- see `_excluded()` below.
 """
 
 from typing import Any, Optional
@@ -8,8 +16,20 @@ from typing import Any, Optional
 from app.services.pipeline_context import PipelineContext
 
 
-def _biggest_missing_column(profile: dict[str, Any]) -> Optional[dict[str, Any]]:
-    missing_pct = profile.get("missing_value_percentages", {})
+def _excluded(ctx: PipelineContext) -> set[str]:
+    """Columns that must never be highlighted as an insight.
+
+    The detected identifier columns (dropped during cleaning) -- an ID/Name/
+    Email/Phone/Address column is not a meaningful feature, so it should not
+    win "Most Unique Category", "Highest Variance Feature", or "Most Important
+    Numeric Feature". The target column is intentionally NOT excluded here: it
+    is a legitimate subject for correlation/importance insights.
+    """
+    return set(ctx.identifier_columns or [])
+
+
+def _biggest_missing_column(profile: dict[str, Any], excluded: set[str]) -> Optional[dict[str, Any]]:
+    missing_pct = {c: p for c, p in profile.get("missing_value_percentages", {}).items() if c not in excluded}
     if not missing_pct:
         return None
     col, pct = max(missing_pct.items(), key=lambda kv: kv[1])
@@ -21,13 +41,15 @@ def _biggest_missing_column(profile: dict[str, Any]) -> Optional[dict[str, Any]]
     }
 
 
-def _strongest_correlation(profile: dict[str, Any]) -> Optional[dict[str, Any]]:
+def _strongest_correlation(profile: dict[str, Any], excluded: set[str]) -> Optional[dict[str, Any]]:
     corr = profile.get("correlations", {})
     best_pair, best_value = None, 0.0
     seen = set()
     for row, cols in corr.items():
+        if row in excluded:
+            continue
         for col, value in cols.items():
-            if row == col or value is None:
+            if row == col or value is None or col in excluded:
                 continue
             pair_key = frozenset((row, col))
             if pair_key in seen:
@@ -45,9 +67,11 @@ def _strongest_correlation(profile: dict[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
-def _most_imbalanced_feature(profile: dict[str, Any]) -> Optional[dict[str, Any]]:
+def _most_imbalanced_feature(profile: dict[str, Any], excluded: set[str]) -> Optional[dict[str, Any]]:
     worst_col, worst_ratio = None, 1.0
     for col, summary in profile.get("categorical_summary", {}).items():
+        if col in excluded:
+            continue
         freq = summary.get("frequency_table", {})
         counts = list(freq.values())
         if len(counts) < 2:
@@ -65,9 +89,11 @@ def _most_imbalanced_feature(profile: dict[str, Any]) -> Optional[dict[str, Any]
     }
 
 
-def _highest_variance_feature(profile: dict[str, Any]) -> Optional[dict[str, Any]]:
+def _highest_variance_feature(profile: dict[str, Any], excluded: set[str]) -> Optional[dict[str, Any]]:
     best_col, best_cov = None, -1.0
     for col, summary in profile.get("numeric_summary", {}).items():
+        if col in excluded:
+            continue
         std, mean = summary.get("std"), summary.get("mean")
         if std is None or not mean:
             continue
@@ -84,7 +110,9 @@ def _highest_variance_feature(profile: dict[str, Any]) -> Optional[dict[str, Any
     }
 
 
-def _most_important_numeric_feature(profile: dict[str, Any], target_column: Optional[str]) -> Optional[dict[str, Any]]:
+def _most_important_numeric_feature(
+    profile: dict[str, Any], target_column: Optional[str], excluded: set[str]
+) -> Optional[dict[str, Any]]:
     """Proxy for 'importance': absolute correlation with the target.
 
     This is explicitly a heuristic proxy, not a trained feature-importance
@@ -98,7 +126,7 @@ def _most_important_numeric_feature(profile: dict[str, Any], target_column: Opti
         return None
     best_col, best_value = None, 0.0
     for col, value in corr.items():
-        if col == target_column or value is None:
+        if col == target_column or value is None or col in excluded:
             continue
         if abs(value) > abs(best_value):
             best_value, best_col = value, col
@@ -112,9 +140,11 @@ def _most_important_numeric_feature(profile: dict[str, Any], target_column: Opti
     }
 
 
-def _most_unique_category(profile: dict[str, Any]) -> Optional[dict[str, Any]]:
+def _most_unique_category(profile: dict[str, Any], excluded: set[str]) -> Optional[dict[str, Any]]:
     best_col, best_count = None, -1
     for col, summary in profile.get("categorical_summary", {}).items():
+        if col in excluded:
+            continue
         count = summary.get("unique_count", 0)
         if count > best_count:
             best_count, best_col = count, col
@@ -128,8 +158,8 @@ def _most_unique_category(profile: dict[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
-def _largest_outlier_count(profile: dict[str, Any]) -> Optional[dict[str, Any]]:
-    outliers = profile.get("outliers", {})
+def _largest_outlier_count(profile: dict[str, Any], excluded: set[str]) -> Optional[dict[str, Any]]:
+    outliers = {c: e for c, e in profile.get("outliers", {}).items() if c not in excluded}
     if not outliers:
         return None
     col, entry = max(outliers.items(), key=lambda kv: kv[1].get("count", 0))
@@ -145,15 +175,20 @@ def _largest_outlier_count(profile: dict[str, Any]) -> Optional[dict[str, Any]]:
 
 
 def build_dataset_insights(ctx: PipelineContext) -> list[dict[str, Any]]:
-    """Return every insight card that could be computed (skips ones with no signal)."""
+    """Return every insight card that could be computed (skips ones with no signal).
+
+    Identifier columns are excluded from every card via `_excluded(ctx)` so a
+    dropped ID/Name/Email column can never be surfaced as a "useful" insight.
+    """
     profile = ctx.profile
+    excluded = _excluded(ctx)
     candidates = [
-        _biggest_missing_column(profile),
-        _strongest_correlation(profile),
-        _most_imbalanced_feature(profile),
-        _highest_variance_feature(profile),
-        _most_important_numeric_feature(profile, ctx.target_column),
-        _most_unique_category(profile),
-        _largest_outlier_count(profile),
+        _biggest_missing_column(profile, excluded),
+        _strongest_correlation(profile, excluded),
+        _most_imbalanced_feature(profile, excluded),
+        _highest_variance_feature(profile, excluded),
+        _most_important_numeric_feature(profile, ctx.target_column, excluded),
+        _most_unique_category(profile, excluded),
+        _largest_outlier_count(profile, excluded),
     ]
     return [c for c in candidates if c is not None]

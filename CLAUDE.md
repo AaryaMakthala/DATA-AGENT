@@ -207,6 +207,23 @@ cleaning excludes the target; single/zero-class targets → `problem_type="inval
 target detection on the original frame; visualization before encoding; identifier
 columns excluded from charts and ML reasoning.
 
+**6.7 Before/after mislabeled one-hot-encoded columns as removed (FIXED 2026-07-20).**
+The Before/After summary (and the cleaning-log download that reads it) reported every
+one-hot-encoded column as *removed* and counted *zero* columns encoded — e.g. Titanic
+`Sex`/`Embarked` showed under "Columns removed" while `columns_encoded` was empty, even
+though the cleaned CSV correctly had `Sex_male`/`Sex_female`/`Embarked_*`. Two
+interacting bugs in `before_after.py`: (1) `columns_encoded` compared each plan entry
+(a dict `{"action": "one_hot", ...}`) against the string `"one_hot"`, which never
+matches, so it was always `[]` — fixed by unwrapping the action like the
+`missing_values` branch already does; (2) `columns_removed` came from the profile
+column set-difference, and encoding makes the original column name vanish (replaced by
+dummies), so encoded columns fell into "removed" — fixed by excluding `columns_encoded`
+from `other_removed`. Data was always correct; this was reporting-only, but it misfired
+for **every** one-hot-encoded column in every dataset. A skipped-encode
+(`_ENCODING_SKIPPED_LABEL`) is a plain string, not `"one_hot"`, so it correctly stays
+out of `columns_encoded`. Covered by `test_encoded_column_is_encoded_not_removed` and
+`test_skipped_encode_is_not_counted_as_encoded` in `tests/test_presentation_polish.py`.
+
 ## 7. Open Items / Known Gaps (confirmed still open)
 
 1. **`analysis_report` and `cleaning_log` downloads return `null`** — no generator

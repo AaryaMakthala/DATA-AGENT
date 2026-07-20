@@ -12,6 +12,8 @@ from app.agents.graph import build_graph
 from app.agents.llm_router import LLMRouterError
 from app.api.errors import APIError
 from app.api.schemas import AnalyzeResponse, ResultsResponse, UploadResponse
+from app.services.before_after import compute_before_after
+from app.services.cleaning_report import build_cleaning_log_text
 from app.services.csv_service import CSVServiceError, validate_and_preview
 from app.services.file_service import (
     FileServiceError,
@@ -24,6 +26,7 @@ from app.services.file_service import (
     save_upload,
     validate_file_id,
 )
+from app.services.pipeline_context import PipelineContext
 from app.services.report_adapter import build_results_response
 from app.tools.cleaner import CleanerError
 from app.tools.ml_recommender import MLRecommenderError
@@ -377,6 +380,69 @@ async def download_json_results(file_id: str) -> FileResponse:
         report_path,
         media_type="application/json",
         filename=f"{file_id}_results.json",
+    )
+
+
+@router.get("/download/cleaning-log/{file_id}")
+async def download_cleaning_log(file_id: str) -> StreamingResponse:
+    """Serve a plain-text cleaning log built from the REAL applied plan.
+
+    Previously the Download Center's "Cleaning Log" card was always
+    "Unavailable" because no generator existed (CLAUDE.md §7.1). This builds
+    the log on demand from the same stored `cleaning_plan` (the executed plan)
+    and `cleaned_profile`/`profile` the results page already renders -- so it
+    reflects exactly what the cleaner did, with nothing fabricated. Returns 404
+    when the report doesn't exist or predates cleaning-plan persistence.
+    """
+    _require_valid_file_id(file_id)
+
+    report_path = resolve_report_path(file_id)
+    if not report_path.exists():
+        raise APIError(
+            404,
+            "NOT_FOUND",
+            f"No results found for file_id='{file_id}'. Run /analyze first.",
+        )
+    try:
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise APIError(500, "INTERNAL_ERROR", "Stored analysis results are corrupted.") from exc
+
+    applied_plan = data.get("cleaning_plan")
+    if not isinstance(applied_plan, dict):
+        raise APIError(
+            404,
+            "NOT_FOUND",
+            f"No cleaning log available for file_id='{file_id}' (dataset was not cleaned).",
+        )
+
+    # Rebuild before/after the same way report_adapter does, when both profiles
+    # are present -- purely for the log's summary header. Never fatal: the log
+    # renders fine from the applied_plan alone if this can't be computed.
+    before_after = None
+    profile_original = data.get("profile")
+    profile_after = data.get("cleaned_profile")
+    if profile_original and profile_after:
+        try:
+            ctx = PipelineContext(
+                request_id=file_id,
+                file_id=file_id,
+                original_file_path="",
+                profile=profile_original,
+                row_count=int(profile_original.get("shape", {}).get("rows", 0)),
+                column_count=int(profile_original.get("shape", {}).get("columns", 0)),
+            )
+            ctx.cleaned_profile = profile_after
+            before_after = compute_before_after(ctx, applied_plan)
+        except Exception:  # noqa: BLE001 -- summary is optional; log still renders
+            logger.warning("download_cleaning_log: could not compute before/after for %s", file_id)
+
+    log_text = build_cleaning_log_text(file_id, applied_plan, before_after)
+    buffer = io.BytesIO(log_text.encode("utf-8"))
+    return StreamingResponse(
+        buffer,
+        media_type="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="{file_id}_cleaning_log.txt"'},
     )
 
 

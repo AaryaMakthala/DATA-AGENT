@@ -316,6 +316,8 @@ export interface MLRecommendationSection {
   why_not_others: WhyNotOtherCard[];
   readiness?: ReadinessSection | null;
   warnings: string[];
+  /** Identifier columns dropped during cleaning; excluded from the stats table. */
+  excluded_columns?: string[];
 }
 
 export interface DownloadsSection {

@@ -372,6 +372,7 @@ const mlRecommendationSchema = z
       .passthrough()
       .nullish(),
     warnings: z.array(z.string()).nullish().transform((v) => v ?? []),
+    excluded_columns: z.array(z.string()).nullish().transform((v) => v ?? []),
   })
   .passthrough()
   .nullish();
@@ -916,10 +917,16 @@ function buildRealVM(data: ValidatedResults): ResultsVM {
   // --- legacy profile-derived sections (kept for backward compatibility) ---
   const profile = data.profile;
   const correlations = topCorrelations(profile?.correlations);
+  // Identifier columns (ID/PassengerId/Name/...) are dropped during cleaning
+  // and carry no modeling signal, so they must not appear in the Statistical
+  // Summary as if they were useful numeric features (audit item #3).
+  const excludedCols = new Set(rec?.excluded_columns ?? []);
   const stats: StatRowVM[] | undefined = profile?.numeric_summary
-    ? Object.entries(profile.numeric_summary).map(([column, s]) => ({
-        column, mean: s.mean ?? undefined, median: s.median ?? undefined, std: s.std ?? undefined, min: s.min ?? undefined, max: s.max ?? undefined,
-      }))
+    ? Object.entries(profile.numeric_summary)
+        .filter(([column]) => !excludedCols.has(column))
+        .map(([column, s]) => ({
+          column, mean: s.mean ?? undefined, median: s.median ?? undefined, std: s.std ?? undefined, min: s.min ?? undefined, max: s.max ?? undefined,
+        }))
     : undefined;
 
   const warnings = [...(validity?.warnings ?? []), ...(rec?.warnings ?? [])];

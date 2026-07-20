@@ -55,19 +55,32 @@ def compute_before_after(ctx: PipelineContext, applied_plan: dict[str, Any]) -> 
     cols_before = set(before.get("columns", {}).keys())
     cols_after = set(after.get("columns", {}).keys())
 
+    # One-hot encoding replaces N original categorical columns with M dummy
+    # columns; "columns_encoded" counts the ORIGINAL columns the plan encoded.
+    # The plan stores each entry as a dict ({"action": "one_hot", ...}), so the
+    # action is unwrapped exactly like the missing_values branch below -- a bare
+    # `== "one_hot"` against the dict never matches. A skipped-encode label
+    # (_ENCODING_SKIPPED_LABEL) is a plain string that isn't "one_hot", so a
+    # high-cardinality column the cleaner declined to encode stays out of here.
+    encoding_plan = applied_plan.get("encoding", {})
+    columns_encoded = []
+    if isinstance(encoding_plan, dict):
+        for col, action in encoding_plan.items():
+            act = action.get("action") if isinstance(action, dict) else action
+            if act == "one_hot":
+                columns_encoded.append(col)
+
     identifier_columns_removed = list(applied_plan.get("dropped_columns", {}).keys())
     # Columns that disappeared for reasons other than the identifier drop
     # (e.g. a missing-value "drop column" strategy, if ever added upstream).
-    other_removed = [c for c in (cols_before - cols_after) if c not in identifier_columns_removed]
+    # One-hot-encoded columns also vanish from the cleaned profile (replaced by
+    # dummies), so they're excluded here -- they're reported under
+    # columns_encoded, never as "removed".
+    other_removed = [
+        c for c in (cols_before - cols_after)
+        if c not in identifier_columns_removed and c not in columns_encoded
+    ]
     columns_removed = identifier_columns_removed + other_removed
-
-    # One-hot encoding replaces N original categorical columns with M dummy
-    # columns; "columns_encoded" counts the ORIGINAL columns the plan encoded.
-    encoding_plan = applied_plan.get("encoding", {})
-    columns_encoded = [
-        col for col, action in encoding_plan.items()
-        if action == "one_hot"
-    ] if isinstance(encoding_plan, dict) else []
 
     # Values imputed: count of missing cells that were filled (not dropped).
     # missing_before - missing_after over-counts if rows were also dropped

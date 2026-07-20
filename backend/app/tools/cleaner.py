@@ -67,6 +67,22 @@ _HIGH_MISSING_COLUMN_DROP_REASON = (
 # say so instead of echoing an action that never happened.
 _TARGET_PROTECTED_LABEL = "skipped - target column is preserved"
 
+# Shown in place of an encoding/outlier action the LLM proposed but the cleaner
+# deliberately DID NOT execute (a high-cardinality/free-text column left
+# un-encoded to avoid feature explosion; a non-numeric or too-few-rows column
+# whose outliers weren't acted on). Without this the "Cleaning Plan Applied"
+# report -- and the Cleaning Timeline built from it -- would claim an action
+# ("One-hot encoded 'Ticket'") that never actually ran, contradicting the
+# cleaned CSV (which still has the raw column). The timeline/before-after
+# helpers treat any strategy that isn't the concrete action word as a no-op,
+# so marking a skipped column with one of these labels drops it from both.
+_ENCODING_SKIPPED_LABEL = (
+    "skipped - column left un-encoded (high cardinality / free text would explode the feature space)"
+)
+_OUTLIER_SKIPPED_LABEL = (
+    "skipped - outliers not acted on (non-numeric column or too few rows for reliable IQR bounds)"
+)
+
 # Reason surfaced in the applied plan for each identifier column the cleaner
 # drops (CLAUDE.md Known Bugs, Issue 5).
 _IDENTIFIER_DROP_REASON = (
@@ -265,7 +281,9 @@ def _apply_duplicates(df: pd.DataFrame, strategy: Any) -> pd.DataFrame:
     return df
 
 
-def _apply_outliers(df: pd.DataFrame, plan: dict[str, Any], target_column: Optional[str]) -> pd.DataFrame:
+def _apply_outliers(
+    df: pd.DataFrame, plan: dict[str, Any], target_column: Optional[str]
+) -> tuple[pd.DataFrame, list[str]]:
     """Cap or remove IQR outliers per-column, following the LLM's plan.
 
     The target column is always excluded from outlier detection/capping/
@@ -277,31 +295,50 @@ def _apply_outliers(df: pd.DataFrame, plan: dict[str, Any], target_column: Optio
     On datasets under `_MIN_ROWS_FOR_OUTLIER_ACTION` rows, IQR bounds are too
     unreliable to act on, so capping/removal is skipped entirely and the
     outliers are left for the profile/report to surface (Known Bugs, Issue 9).
+
+    Returns:
+        `(df, skipped_columns)` where `skipped_columns` lists every column the
+        LLM asked to cap/remove that was NOT acted on (too few rows overall, a
+        non-numeric column, or a column no longer present). The caller rewrites
+        those entries in the applied-plan report so the Cleaning Timeline never
+        claims an outlier action that didn't run.
     """
+    skipped: list[str] = []
     if len(df) < _MIN_ROWS_FOR_OUTLIER_ACTION:
         logger.info(
             "Cleaner: only %d rows (< %d) -- skipping all outlier capping/removal; "
             "outliers are reported in the profile but not acted on",
             len(df), _MIN_ROWS_FOR_OUTLIER_ACTION,
         )
-        return df
+        # Every column the plan intended to cap/remove was skipped wholesale.
+        skipped = [
+            col for col, raw in plan.items()
+            if col != target_column and _strategy_of(raw) in ("cap", "remove")
+        ]
+        return df, skipped
 
     for column, raw_strategy in plan.items():
         strategy = _strategy_of(raw_strategy)
         if column not in df.columns:
             logger.warning("Cleaner: outliers plan references unknown column '%s'; skipping", column)
+            if strategy in ("cap", "remove"):
+                skipped.append(column)
             continue
         if column == target_column:
             logger.info("Cleaner: skipping outlier strategy '%s' for target column '%s' -- target is preserved", strategy, column)
             continue
         if not pd.api.types.is_numeric_dtype(df[column]):
             logger.warning("Cleaner: outlier strategy requested for non-numeric column '%s'; skipping", column)
+            if strategy in ("cap", "remove"):
+                skipped.append(column)
             continue
         if strategy not in _VALID_OUTLIER_STRATEGIES or strategy == "keep":
             continue
 
         series = df[column].dropna()
         if series.empty:
+            if strategy in ("cap", "remove"):
+                skipped.append(column)
             continue
         q1, q3 = series.quantile(0.25), series.quantile(0.75)
         iqr = q3 - q1
@@ -317,16 +354,27 @@ def _apply_outliers(df: pd.DataFrame, plan: dict[str, Any], target_column: Optio
             # view of the original (avoids SettingWithCopyWarning + silent no-ops).
             df = df[df[column].isna() | df[column].between(lower, upper)].copy()
             logger.info("Cleaner: removed %d outlier rows from '%s'", before - len(df), column)
-    return df
+    return df, skipped
 
 
-def _apply_encoding(df: pd.DataFrame, plan: dict[str, Any], target_column: Optional[str]) -> pd.DataFrame:
+def _apply_encoding(
+    df: pd.DataFrame, plan: dict[str, Any], target_column: Optional[str]
+) -> tuple[pd.DataFrame, list[str]]:
     """One-hot encode the columns the plan flags for it.
 
     The target column is never encoded -- it must reach the ML recommender
     in its original, unmodified form.
+
+    Returns:
+        `(df, skipped_columns)` where `skipped_columns` lists every column the
+        LLM asked to one-hot encode that was NOT encoded because its
+        cardinality would explode the feature space (an ID/free-text field the
+        LLM mistook for a category). The caller rewrites those entries in the
+        applied-plan report so the Cleaning Timeline never claims a column was
+        one-hot encoded when it wasn't -- the cleaned CSV still has it raw.
     """
     columns_to_encode = []
+    skipped: list[str] = []
     for column, raw_strategy in plan.items():
         strategy = _strategy_of(raw_strategy)
         if column not in df.columns:
@@ -334,6 +382,8 @@ def _apply_encoding(df: pd.DataFrame, plan: dict[str, Any], target_column: Optio
                 "Cleaner: encoding plan references unknown column '%s'; skipping. Available columns: %s",
                 column, list(df.columns),
             )
+            if strategy == "one_hot":
+                skipped.append(column)
             continue
         if column == target_column:
             logger.info("Cleaner: skipping encoding strategy '%s' for target column '%s' -- target is preserved", strategy, column)
@@ -355,13 +405,14 @@ def _apply_encoding(df: pd.DataFrame, plan: dict[str, Any], target_column: Optio
                 "the %d-category / %.2f-ratio cap; encoding it would explode the feature space",
                 column, n_unique, unique_ratio, _MAX_CATEGORIES_FOR_ENCODING, _MAX_ENCODE_UNIQUE_RATIO,
             )
+            skipped.append(column)
             continue
         columns_to_encode.append(column)
 
     if columns_to_encode:
         df = pd.get_dummies(df, columns=columns_to_encode, dtype=int)
         logger.info("Cleaner: one-hot encoded columns: %s", columns_to_encode)
-    return df
+    return df, skipped
 
 
 def _ensure_not_empty(df: pd.DataFrame, after_step: str) -> None:
@@ -590,7 +641,16 @@ def clean_csv(
     outliers_plan = cleaning_plan.get("outliers")
     rows_before_outliers = len(df)
     if isinstance(outliers_plan, dict):
-        df = _apply_outliers(df, outliers_plan, target_column)
+        df, outliers_skipped = _apply_outliers(df, outliers_plan, target_column)
+        if outliers_skipped:
+            # The report/timeline must reflect what actually ran: rewrite the
+            # proposed cap/remove action for each skipped column so downstream
+            # helpers don't claim an outlier action that never executed.
+            applied_plan = dict(applied_plan)
+            report_outliers = dict(applied_plan.get("outliers") or {})
+            for col in outliers_skipped:
+                report_outliers[col] = _OUTLIER_SKIPPED_LABEL
+            applied_plan["outliers"] = report_outliers
     _ensure_not_empty(df, "outlier removal")
 
     rows_after_outliers = len(df)
@@ -622,7 +682,18 @@ def clean_csv(
 
     encoding_plan = cleaning_plan.get("encoding")
     if isinstance(encoding_plan, dict):
-        df = _apply_encoding(df, encoding_plan, target_column)
+        df, encoding_skipped = _apply_encoding(df, encoding_plan, target_column)
+        if encoding_skipped:
+            # Same reconciliation as outliers above: a column the LLM asked to
+            # one-hot encode but the cardinality guard skipped must NOT show up
+            # in the report/timeline as "One-hot encoded 'X'" -- the cleaned CSV
+            # still has it raw. Rewrite its proposed action to the skipped label
+            # so build_cleaning_timeline / compute_before_after drop it.
+            applied_plan = dict(applied_plan)
+            report_encoding = dict(applied_plan.get("encoding") or {})
+            for col in encoding_skipped:
+                report_encoding[col] = _ENCODING_SKIPPED_LABEL
+            applied_plan["encoding"] = report_encoding
     _log_df_state(file_id, "after encoding", df)
 
     output_path = Config.CLEANED_FILES_FOLDER / f"{file_id}_cleaned.csv"
