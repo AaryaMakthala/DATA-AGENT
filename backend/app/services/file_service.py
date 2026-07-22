@@ -24,6 +24,12 @@ _UPLOAD_CHUNK_BYTES = 1024 * 1024  # 1 MiB
 # folder: "/", "\", ".", "..", and any other path separator or metacharacter.
 _VALID_FILE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
+# Used to sanitize an arbitrary (untrusted) uploaded filename into a safe base
+# name for both the sidecar record and any artifact filename derived from it.
+# Anything outside this set -- including "/", "\\", "..", whitespace -- is
+# collapsed to "_", which also neutralizes path traversal.
+_UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9_-]+")
+
 
 class FileServiceError(Exception):
     """Raised when a file operation fails."""
@@ -55,6 +61,66 @@ def validate_file_id(file_id: str) -> str:
             "(no path separators or '.')."
         )
     return file_id
+
+
+def _sanitize_base_name(filename: str) -> str:
+    """Strip any extension and collapse an untrusted filename to a safe base name.
+
+    Whitespace and any character that isn't a letter/digit/underscore/hyphen
+    (including "/", "\\", "." and "..") is replaced with "_", which both makes
+    the result filesystem-safe and neutralizes path traversal. Falls back to
+    "upload" if nothing safe survives (e.g. a filename that was pure emoji).
+    """
+    stem = Path(filename).stem.strip()
+    sanitized = _UNSAFE_NAME_CHARS.sub("_", stem).strip("_")
+    return sanitized or "upload"
+
+
+def save_original_filename(file_id: str, filename: str) -> None:
+    """Persist the sanitized original upload name in a small sidecar file.
+
+    file_id remains the internal routing/lookup key everywhere; this sidecar
+    only exists so downloadable artifacts can later be named after what the
+    user actually uploaded instead of the internal uuid.
+    """
+    validate_file_id(file_id)
+    Config.UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+    sidecar = Config.UPLOAD_FOLDER / f"{file_id}.name.txt"
+    sidecar.write_text(_sanitize_base_name(filename), encoding="utf-8")
+
+
+def resolve_original_filename(file_id: str) -> str:
+    """Read back the sanitized original upload name saved by `save_original_filename`.
+
+    Falls back to `file_id` itself if the sidecar is missing -- e.g. an
+    upload saved before this sidecar existed, or the file_id having no
+    sidecar for some other benign reason. Never raises.
+    """
+    validate_file_id(file_id)
+    sidecar = Config.UPLOAD_FOLDER / f"{file_id}.name.txt"
+    try:
+        name = sidecar.read_text(encoding="utf-8").strip()
+    except OSError:
+        return file_id
+    return name or file_id
+
+
+def build_artifact_filename(original_filename: str, suffix: str, extension: str, folder: Path, file_id: str) -> str:
+    """Build a human-visible artifact filename from the original upload name.
+
+    Returns `{sanitized_base}_{suffix}.{extension}`, e.g.
+    `build_artifact_filename("large-dataset.csv", "cleaned", "csv", ...)` ->
+    `"large-dataset_cleaned.csv"`. If a file with that exact name already
+    exists in `folder` (a different run whose original upload sanitized to the
+    same base name), a short disambiguator -- the first 6 chars of `file_id`
+    -- is appended before the extension instead of silently overwriting:
+    `"large-dataset_cleaned_a1b2c3.csv"`.
+    """
+    base = _sanitize_base_name(original_filename)
+    candidate = f"{base}_{suffix}.{extension}"
+    if not (folder / candidate).exists():
+        return candidate
+    return f"{base}_{suffix}_{file_id[:6]}.{extension}"
 
 
 def save_upload(file: UploadFile) -> tuple[str, Path]:
@@ -127,6 +193,8 @@ def save_upload(file: UploadFile) -> tuple[str, Path]:
         file_id,
         total_bytes,
     )
+
+    save_original_filename(file_id, filename)
 
     return file_id, destination
 

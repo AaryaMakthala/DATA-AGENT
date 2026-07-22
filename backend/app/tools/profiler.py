@@ -426,6 +426,22 @@ def _detect_outliers(df: pd.DataFrame, numeric_cols: list[str]) -> dict[str, dic
     return outliers
 
 
+def _outlier_eligible_columns(df: pd.DataFrame, numeric_cols: list[str]) -> list[str]:
+    """Select the numeric columns worth IQR outlier detection: excludes binary columns.
+
+    A column with 2 or fewer distinct non-null values (e.g. a 0/1 one-hot-encoded
+    dummy) has Q1 == Q3 == 0, so IQR == 0 and every nonzero value gets flagged as
+    an "outlier" -- not a real signal, just an artifact of IQR being meaningless
+    for binary/constant data. Excluded here the same way constant columns are
+    excluded from correlation in _correlatable_columns.
+    """
+    eligible = [col for col in numeric_cols if df[col].nunique(dropna=True) > 2]
+    excluded = len(numeric_cols) - len(eligible)
+    if excluded:
+        logger.info("Profiler: excluded %d binary/constant numeric column(s) from outlier detection", excluded)
+    return eligible
+
+
 def _compute_correlations(df: pd.DataFrame, numeric_cols: list[str]) -> dict[str, dict[str, Any]]:
     """Compute the pairwise correlation matrix for numeric columns.
 
@@ -553,8 +569,9 @@ def profile_csv(file_path: str) -> dict[str, Any]:
             if count > 0 and n_rows > 0
         }
 
+        outlier_eligible_cols = _outlier_eligible_columns(df, numeric_cols)
         with log_duration(logger, f"profile_csv.outlier_detection [{path.name}]"):
-            outliers = _detect_outliers(df, numeric_cols)
+            outliers = _detect_outliers(df, outlier_eligible_cols)
         with log_duration(logger, f"profile_csv.correlations [{path.name}]"):
             correlations = _compute_correlations(df, numeric_cols)
 
