@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from app.services import file_service
 from app.tools.profiler import ProfilerError, load_dataframe
 from app.utils.config import Config
 from app.utils.logger import get_logger
@@ -470,6 +471,7 @@ def clean_csv(
     file_path: str,
     cleaning_plan: Any,
     file_id: str,
+    original_filename: str,
     target_column: Optional[str] = None,
     identifier_columns: Optional[list[str]] = None,
 ) -> tuple[str, dict[str, Any], str]:
@@ -490,6 +492,10 @@ def clean_csv(
             return valid JSON) -- handled gracefully by skipping steps that
             can't be understood rather than failing the whole pipeline.
         file_id: Identifier used to name the output file.
+        original_filename: The user's originally uploaded filename (resolved
+            via file_service.resolve_original_filename by the caller), used
+            to build human-readable output filenames instead of the raw
+            file_id -- e.g. "large-dataset_cleaned.csv".
         target_column: The target column already identified by
             `detect_target_column` on the ORIGINAL uploaded dataframe (see
             `target_detection_node` in agents/graph.py). Deliberately NOT
@@ -674,7 +680,9 @@ def clean_csv(
     # Snapshot for visualization BEFORE one-hot encoding (Issue 3): charts must
     # be drawn from the original categorical columns, not the dummy columns.
     _log_df_state(file_id, "before visualization snapshot", df)
-    viz_path = Config.CLEANED_FILES_FOLDER / f"{file_id}_viz.csv"
+    viz_path = Config.CLEANED_FILES_FOLDER / file_service.build_artifact_filename(
+        original_filename, "viz", "csv", Config.CLEANED_FILES_FOLDER, file_id
+    )
     try:
         df.to_csv(viz_path, index=False)
     except OSError as exc:
@@ -696,7 +704,9 @@ def clean_csv(
             applied_plan["encoding"] = report_encoding
     _log_df_state(file_id, "after encoding", df)
 
-    output_path = Config.CLEANED_FILES_FOLDER / f"{file_id}_cleaned.csv"
+    output_path = Config.CLEANED_FILES_FOLDER / file_service.build_artifact_filename(
+        original_filename, "cleaned", "csv", Config.CLEANED_FILES_FOLDER, file_id
+    )
     try:
         df.to_csv(output_path, index=False)
     except OSError as exc:

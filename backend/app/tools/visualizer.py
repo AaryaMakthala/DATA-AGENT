@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
+from app.services import file_service
 from app.tools.profiler import ProfilerError, load_dataframe
 from app.utils.config import Config
 from app.utils.logger import get_logger
@@ -49,7 +50,7 @@ class VisualizerError(Exception):
     """Raised when charts cannot be generated for a dataset."""
 
 
-def _bar_chart(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> Optional[dict[str, Any]]:
+def _bar_chart(df: pd.DataFrame, column: str, out_dir: Path, file_id: str, original_filename: str) -> Optional[dict[str, Any]]:
     """Bar chart of value frequencies for a categorical column."""
     counts = df[column].value_counts(dropna=True)
     if counts.empty:
@@ -69,7 +70,9 @@ def _bar_chart(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> Op
     plt.xticks(rotation=45, ha="right")
     fig.tight_layout()
 
-    path = out_dir / f"{file_id}_bar_{_safe_name(column)}.png"
+    path = out_dir / file_service.build_artifact_filename(
+        original_filename, f"bar_chart_{_safe_name(column)}", "png", out_dir, file_id
+    )
     fig.savefig(path)
     plt.close(fig)
 
@@ -86,7 +89,7 @@ def _bar_chart(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> Op
     }
 
 
-def _histogram(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> Optional[dict[str, Any]]:
+def _histogram(df: pd.DataFrame, column: str, out_dir: Path, file_id: str, original_filename: str) -> Optional[dict[str, Any]]:
     """Histogram of a numerical column's distribution."""
     series = df[column].dropna()
     if series.empty:
@@ -111,7 +114,9 @@ def _histogram(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> Op
     ax.set_ylabel("frequency")
     fig.tight_layout()
 
-    path = out_dir / f"{file_id}_hist_{_safe_name(column)}.png"
+    path = out_dir / file_service.build_artifact_filename(
+        original_filename, f"histogram_{_safe_name(column)}", "png", out_dir, file_id
+    )
     fig.savefig(path)
     plt.close(fig)
 
@@ -131,7 +136,7 @@ def _histogram(df: pd.DataFrame, column: str, out_dir: Path, file_id: str) -> Op
     }
 
 
-def _scatter_plot(df: pd.DataFrame, col_x: str, col_y: str, out_dir: Path, file_id: str) -> Optional[dict[str, Any]]:
+def _scatter_plot(df: pd.DataFrame, col_x: str, col_y: str, out_dir: Path, file_id: str, original_filename: str) -> Optional[dict[str, Any]]:
     """Scatter plot between two numerical columns."""
     pair_df = df[[col_x, col_y]].dropna()
     if pair_df.empty:
@@ -142,7 +147,9 @@ def _scatter_plot(df: pd.DataFrame, col_x: str, col_y: str, out_dir: Path, file_
     ax.set_title(f"'{col_x}' vs '{col_y}'")
     fig.tight_layout()
 
-    path = out_dir / f"{file_id}_scatter_{_safe_name(col_x)}_{_safe_name(col_y)}.png"
+    path = out_dir / file_service.build_artifact_filename(
+        original_filename, f"scatter_{_safe_name(col_x)}_vs_{_safe_name(col_y)}", "png", out_dir, file_id
+    )
     fig.savefig(path)
     plt.close(fig)
 
@@ -163,7 +170,7 @@ def _scatter_plot(df: pd.DataFrame, col_x: str, col_y: str, out_dir: Path, file_
     }
 
 
-def _correlation_heatmap(df: pd.DataFrame, numeric_cols: list[str], out_dir: Path, file_id: str) -> Optional[dict[str, Any]]:
+def _correlation_heatmap(df: pd.DataFrame, numeric_cols: list[str], out_dir: Path, file_id: str, original_filename: str) -> Optional[dict[str, Any]]:
     """Heatmap of the pairwise correlation matrix for numeric columns."""
     if len(numeric_cols) < 2:
         return None
@@ -192,7 +199,9 @@ def _correlation_heatmap(df: pd.DataFrame, numeric_cols: list[str], out_dir: Pat
     ax.set_title("Correlation matrix")
     fig.tight_layout()
 
-    path = out_dir / f"{file_id}_correlation_heatmap.png"
+    path = out_dir / file_service.build_artifact_filename(
+        original_filename, "correlation_heatmap", "png", out_dir, file_id
+    )
     fig.savefig(path)
     plt.close(fig)
 
@@ -237,13 +246,18 @@ def _top_correlated_pairs(df: pd.DataFrame, numeric_cols: list[str], limit: int)
     return [(a, b) for a, b, _ in pairs[:limit]]
 
 
-def generate_charts(file_path: str, file_id: str) -> list[dict[str, Any]]:
+def generate_charts(file_path: str, file_id: str, original_filename: str) -> list[dict[str, Any]]:
     """Generate all charts for a (cleaned) dataset and save them to outputs/charts/.
 
     Args:
         file_path: Path to the CSV to visualize (the cleaned CSV, per the
             LangGraph node sequence in CLAUDE.md §5).
-        file_id: Identifier used to name and namespace output chart files.
+        file_id: Identifier used to namespace output chart files (collision
+            disambiguator only -- see file_service.build_artifact_filename).
+        original_filename: The user's originally uploaded filename (resolved
+            via file_service.resolve_original_filename by the caller), used
+            to build human-readable chart filenames, e.g.
+            "large-dataset_bar_chart_Country.png".
 
     Returns:
         A list of chart metadata dicts, each:
@@ -283,21 +297,21 @@ def generate_charts(file_path: str, file_id: str) -> list[dict[str, Any]]:
     charts: list[dict[str, Any]] = []
 
     for column in categorical_cols[:_MAX_BAR_CHARTS]:
-        chart = _bar_chart(df, column, out_dir, file_id)
+        chart = _bar_chart(df, column, out_dir, file_id, original_filename)
         if chart:
             charts.append(chart)
 
     for column in continuous_numeric_cols[:_MAX_HISTOGRAMS]:
-        chart = _histogram(df, column, out_dir, file_id)
+        chart = _histogram(df, column, out_dir, file_id, original_filename)
         if chart:
             charts.append(chart)
 
     for col_x, col_y in _top_correlated_pairs(df, continuous_numeric_cols, _MAX_SCATTER_PAIRS):
-        chart = _scatter_plot(df, col_x, col_y, out_dir, file_id)
+        chart = _scatter_plot(df, col_x, col_y, out_dir, file_id, original_filename)
         if chart:
             charts.append(chart)
 
-    heatmap = _correlation_heatmap(df, continuous_numeric_cols, out_dir, file_id)
+    heatmap = _correlation_heatmap(df, continuous_numeric_cols, out_dir, file_id, original_filename)
     if heatmap:
         charts.append(heatmap)
 

@@ -232,9 +232,17 @@ def build_results_response(file_id: str, data: dict[str, Any]) -> dict[str, Any]
     )
     quality_score_value = quality_result.get("quality_score", 0)
 
+    # `original_filename` is the sanitized, extension-stripped base name the
+    # graph resolved in profiler_node (see agents/state.py); it round-trips
+    # into the stored report because it's a real AnalystState field. Falls
+    # back to the file_id-based name for reports written before this field
+    # existed.
+    original_filename = data.get("original_filename")
+    dataset_name = f"{original_filename}.csv" if original_filename else f"{file_id}.csv"
+
     overview = build_dataset_overview(
         ctx,
-        dataset_name=f"{file_id}.csv",
+        dataset_name=dataset_name,
         quality_score=quality_score_value,
     )
     health = build_dataset_health(quality_score_value)

@@ -53,6 +53,7 @@ import concurrent.futures
 import json
 import re
 import uuid
+from pathlib import Path
 
 from langgraph.graph import END, START, StateGraph
 
@@ -99,6 +100,11 @@ def profiler_node(state: AnalystState) -> dict:
     """
     logger.info("Graph: running profiler node for %s", state["file_path"])
     file_id = state.get("file_id") or uuid.uuid4().hex
+    # Prefer the real upload name the FastAPI route seeded into the initial
+    # state (via file_service.resolve_original_filename); fall back to the
+    # file_path's stem for graph invocations that didn't go through /upload
+    # (e.g. direct tests) -- see AnalystState.original_filename.
+    original_filename = state.get("original_filename") or Path(state["file_path"]).stem
     metrics: dict[str, float] = {}
     try:
         with log_duration(logger, "profiler_node", metrics, "profiling"):
@@ -106,7 +112,12 @@ def profiler_node(state: AnalystState) -> dict:
     except ProfilerError as exc:
         logger.error("Graph: profiler node failed: %s", exc)
         raise
-    return {"profile": profile, "file_id": file_id, "processing_metrics": metrics}
+    return {
+        "profile": profile,
+        "file_id": file_id,
+        "original_filename": original_filename,
+        "processing_metrics": metrics,
+    }
 
 
 def target_detection_node(state: AnalystState) -> dict:
@@ -286,6 +297,7 @@ def python_cleaning_node(state: AnalystState) -> dict:
                 state["file_path"],
                 state.get("cleaning_plan"),
                 file_id,
+                state["original_filename"],
                 state.get("target_column"),
                 state.get("identifier_columns"),
             )
@@ -320,7 +332,7 @@ def visualization_node(state: AnalystState) -> dict:
     metrics: dict[str, float] = {}
     try:
         with log_duration(logger, "visualization_node (chart generation)", metrics, "generating_charts"):
-            charts = generate_charts(viz_source, file_id)
+            charts = generate_charts(viz_source, file_id, state["original_filename"])
     except VisualizerError as exc:
         logger.error("Graph: visualization node failed: %s", exc)
         raise

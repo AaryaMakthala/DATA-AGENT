@@ -33,6 +33,17 @@ class AnalystState(TypedDict, total=False):
 
     file_path: str
     file_id: str
+
+    # The user's originally uploaded filename (e.g. "large-dataset.csv"),
+    # resolved by the FastAPI route via file_service.resolve_original_filename
+    # and seeded into the initial state alongside file_id. `profiler_node`
+    # falls back to `Path(file_path).stem` when it's absent (e.g. a graph
+    # invocation that didn't go through /upload, such as a direct test).
+    # `file_id` remains the internal routing/lookup key everywhere;
+    # `original_filename` only drives human-visible artifact filenames --
+    # see cleaner.py's clean_csv and visualizer.py's generate_charts.
+    original_filename: Optional[str]
+
     profile: dict[str, Any]
     target_column: Optional[str]
     target_reasoning: Optional[str]
