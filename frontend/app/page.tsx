@@ -93,7 +93,7 @@ function DashboardPreview() {
       </div>
 
       {/* Data quality score */}
-      <div className="mb-4">
+      <div className="mb-4">a
         <span className="label-mono text-[9px]">Data Quality Score</span>
         <div className="mt-2 flex items-center justify-between">
           <div className="flex-1">
