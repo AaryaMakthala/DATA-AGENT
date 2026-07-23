@@ -352,7 +352,7 @@ async def download_cleaned_csv(file_id: str) -> FileResponse:
     return FileResponse(
         path,
         media_type="text/csv",
-        filename=f"{file_id}_cleaned.csv",
+        filename="cleaned.csv",
     )
 
 
@@ -380,7 +380,7 @@ async def download_json_results(file_id: str) -> FileResponse:
     return FileResponse(
         report_path,
         media_type="application/json",
-        filename=f"{file_id}_results.json",
+        filename="results.json",
     )
 
 
@@ -443,7 +443,7 @@ async def download_cleaning_log(file_id: str) -> StreamingResponse:
     return StreamingResponse(
         buffer,
         media_type="text/plain",
-        headers={"Content-Disposition": f'attachment; filename="{file_id}_cleaning_log.txt"'},
+        headers={"Content-Disposition": 'attachment; filename="cleaning_log.txt"'},
     )
 
 
@@ -492,7 +492,7 @@ async def download_analysis_report(file_id: str) -> StreamingResponse:
     return StreamingResponse(
         buffer,
         media_type="text/plain",
-        headers={"Content-Disposition": f'attachment; filename="{file_id}_analysis_report.txt"'},
+        headers={"Content-Disposition": 'attachment; filename="analysis_report.txt"'},
     )
 
 
@@ -520,12 +520,18 @@ async def download_charts_zip(file_id: str) -> StreamingResponse:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in chart_paths:
-            archive.write(path, arcname=path.name)
+            # Strip the "{file_id}_" prefix so the user sees clean names inside
+            # the archive (e.g. "bar_chart_Country.png") while the on-disk file
+            # retains the full collision-safe name (e.g.
+            # "2099407f_bar_chart_Country.png") -- arcname only affects what the
+            # ZIP entry is called, not which file is read from disk.
+            arcname = path.name.removeprefix(f"{file_id}_")
+            archive.write(path, arcname=arcname)
     buffer.seek(0)
 
     return StreamingResponse(
         buffer,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{file_id}_charts.zip"'},
+        headers={"Content-Disposition": 'attachment; filename="charts.zip"'},
     )
 

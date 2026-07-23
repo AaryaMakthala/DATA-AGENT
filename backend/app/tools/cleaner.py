@@ -474,6 +474,7 @@ def clean_csv(
     original_filename: str,
     target_column: Optional[str] = None,
     identifier_columns: Optional[list[str]] = None,
+    df: Optional[pd.DataFrame] = None,
 ) -> tuple[str, dict[str, Any], str]:
     """Apply an LLM-produced cleaning plan to a CSV and save the cleaned result.
 
@@ -485,7 +486,8 @@ def clean_csv(
     plots.
 
     Args:
-        file_path: Path to the original uploaded CSV.
+        file_path: Path to the original uploaded CSV. Used only when `df` is
+            not provided (see below).
         cleaning_plan: Parsed JSON plan from the Cleaning Plan Node (see
             prompts/cleaning_prompt.py for the expected shape). May be
             malformed (e.g. a `{"raw_plan": ...}` fallback if the LLM didn't
@@ -508,6 +510,13 @@ def clean_csv(
             front -- an arbitrary ID/Name/code carries no modeling signal and
             must not be charted or fed to the recommender (Known Bugs, Issues
             4 and 5).
+        df: Optional pre-loaded DataFrame of the original CSV. When provided
+            by `python_cleaning_node` (which already loaded and repaired the
+            CSV once in `profiler_node`), this avoids a redundant
+            load_dataframe() call. When None (all other callers -- tests,
+            harness, direct invocations), the file is loaded from `file_path`
+            exactly as before. In both cases the cleaned result is still
+            written to disk so downstream nodes can read it.
 
     Returns:
         (cleaned_file_path, applied_plan, viz_file_path). `applied_plan` is
@@ -521,7 +530,14 @@ def clean_csv(
         CleanerError: if the original CSV can't be loaded.
     """
     try:
-        df = load_dataframe(file_path)
+        if df is not None:
+            # Reuse the DataFrame already loaded and repaired by profiler_node;
+            # make a copy so cleaning mutations don't affect the caller's frame
+            # (target_detection_node / validation_node share the same object).
+            df = df.copy()
+            logger.info("Cleaner: using pre-loaded DataFrame from state (skipping disk read)")
+        else:
+            df = load_dataframe(file_path)
     except ProfilerError as exc:
         raise CleanerError(f"Cannot clean unreadable CSV: {exc}") from exc
 

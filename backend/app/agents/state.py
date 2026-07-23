@@ -44,6 +44,15 @@ class AnalystState(TypedDict, total=False):
     # see cleaner.py's clean_csv and visualizer.py's generate_charts.
     original_filename: Optional[str]
 
+    # In-memory DataFrame of the ORIGINAL uploaded CSV, loaded and repaired
+    # once by `profiler_node` and reused by target_detection / validation /
+    # python_cleaning. Avoids re-running pd.read_csv + ragged-header repair
+    # on every early node. Not serialized; in-process graph only. Cleared
+    # implicitly when the graph run ends -- downstream nodes that need the
+    # *cleaned* data (visualization, ml_recommendation) re-read those files
+    # from disk because they are different artifacts.
+    dataframe: Any
+
     profile: dict[str, Any]
     target_column: Optional[str]
     target_reasoning: Optional[str]

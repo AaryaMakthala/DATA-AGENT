@@ -69,7 +69,7 @@ from app.tools.ml_recommender import (
     detect_target_column,
     recommend_algorithms,
 )
-from app.tools.profiler import ProfilerError, load_dataframe, profile_csv
+from app.tools.profiler import ProfilerError, load_dataframe, profile_csv, profile_dataframe
 from app.tools.validator import validate_dataset
 from app.tools.visualizer import VisualizerError, generate_charts
 from app.utils.logger import get_logger, log_duration
@@ -97,6 +97,10 @@ def profiler_node(state: AnalystState) -> dict:
     FastAPI /upload endpoint) already put one in the initial state, it's
     reused; otherwise one is generated here, once, and threaded through
     state for every downstream node that needs to name an output file.
+
+    Loads and repairs the CSV once here and stores the DataFrame in
+    `state["dataframe"]` so target_detection / validation / cleaning reuse
+    it instead of each re-reading the file from disk.
     """
     logger.info("Graph: running profiler node for %s", state["file_path"])
     file_id = state.get("file_id") or uuid.uuid4().hex
@@ -108,12 +112,16 @@ def profiler_node(state: AnalystState) -> dict:
     metrics: dict[str, float] = {}
     try:
         with log_duration(logger, "profiler_node", metrics, "profiling"):
-            profile = profile_csv(state["file_path"])
+            with log_duration(logger, "profiler_node.load_csv"):
+                df = load_dataframe(state["file_path"])
+            label = Path(state["file_path"]).name
+            profile = profile_dataframe(df, label)
     except ProfilerError as exc:
         logger.error("Graph: profiler node failed: %s", exc)
         raise
     return {
         "profile": profile,
+        "dataframe": df,
         "file_id": file_id,
         "original_filename": original_filename,
         "processing_metrics": metrics,
@@ -130,12 +138,16 @@ def target_detection_node(state: AnalystState) -> dict:
     logger.info("Graph: running target detection node for %s", state["file_path"])
     metrics: dict[str, float] = {}
     with log_duration(logger, "target_detection_node", metrics, "target_detection"):
-        try:
-            with log_duration(logger, "target_detection_node.load_csv"):
-                df = load_dataframe(state["file_path"])
-        except ProfilerError as exc:
-            logger.error("Graph: target detection node failed to load CSV: %s", exc)
-            raise
+        df = state.get("dataframe")
+        if df is None:
+            # Fallback for callers that invoke this node without going through
+            # profiler_node (e.g. isolated unit tests).
+            try:
+                with log_duration(logger, "target_detection_node.load_csv"):
+                    df = load_dataframe(state["file_path"])
+            except ProfilerError as exc:
+                logger.error("Graph: target detection node failed to load CSV: %s", exc)
+                raise
         with log_duration(logger, "target_detection_node.detect"):
             target_column, target_reasoning, possible_targets = detect_target_column(df)
             identifier_columns = detect_identifier_columns(df, target_column)
@@ -161,11 +173,13 @@ def validation_node(state: AnalystState) -> dict:
     logger.info("Graph: running validation node")
     metrics: dict[str, float] = {}
     with log_duration(logger, "validation_node", metrics, "validation"):
-        try:
-            df = load_dataframe(state["file_path"])
-        except ProfilerError as exc:
-            logger.error("Graph: validation node failed to load CSV: %s", exc)
-            raise
+        df = state.get("dataframe")
+        if df is None:
+            try:
+                df = load_dataframe(state["file_path"])
+            except ProfilerError as exc:
+                logger.error("Graph: validation node failed to load CSV: %s", exc)
+                raise
         data_validity = validate_dataset(
             df,
             state.get("target_column"),
@@ -287,6 +301,9 @@ def python_cleaning_node(state: AnalystState) -> dict:
     Uses `state["file_id"]` (set once by `profiler_node`) to name output
     files rather than generating its own fallback UUID -- see module
     docstring for why generating separate UUIDs per node was a bug.
+
+    Reuses `state["dataframe"]` (loaded once by `profiler_node`) so cleaning
+    does not re-read the original upload from disk.
     """
     logger.info("Graph: running Python cleaning node")
     file_id = state["file_id"]
@@ -300,6 +317,7 @@ def python_cleaning_node(state: AnalystState) -> dict:
                 state["original_filename"],
                 state.get("target_column"),
                 state.get("identifier_columns"),
+                df=state.get("dataframe"),
             )
     except CleanerError as exc:
         logger.error("Graph: Python cleaning node failed: %s", exc)

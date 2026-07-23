@@ -6,9 +6,10 @@ pipeline -- the LLM never sees the raw dataset, only this summary.
 """
 
 import csv
+import re
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -30,6 +31,46 @@ _MAX_FREQUENCY_ENTRIES = 50
 # dates before we treat the whole column as datetime. Guards against a stray
 # parseable token flipping a genuinely categorical column to datetime.
 _DATETIME_PARSE_THRESHOLD = 0.9
+
+# Sample size for format inference / early date-likeness checks. Parsing the
+# full column with format="mixed" (or no format) is O(n) dateutil inference
+# and dominated profiling on large files (~30s for a 100k-row date column).
+_DATETIME_SAMPLE_SIZE = 200
+
+# If fewer than this fraction of a small sample look date-like, skip the
+# expensive full-column parse entirely (column is clearly not datetime).
+_DATETIME_EARLY_SKIP_THRESHOLD = 0.3
+
+# Common date formats tried against the sample before falling back to a
+# one-shot mixed parse on the sample only. Order matters: more specific /
+# ISO-like formats first so unambiguous strings don't get mis-read.
+_COMMON_DATE_FORMATS = (
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y/%m/%d %H:%M:%S",
+    "%m/%d/%Y",
+    "%d/%m/%Y",
+    "%m-%d-%Y",
+    "%d-%m-%Y",
+    "%m/%d/%Y %H:%M:%S",
+    "%d/%m/%Y %H:%M:%S",
+    "%d-%b-%Y",
+    "%b %d, %Y",
+    "%Y%m%d",
+)
+
+# Loose regex used only for the cheap early-skip gate -- not for real parsing.
+# Matches ISO-ish, slash/dash delimited, and month-name styles.
+_DATE_LIKE_RE = re.compile(
+    r"("
+    r"\d{4}[-/]\d{1,2}[-/]\d{1,2}"  # 2020-01-15 / 2020/1/15
+    r"|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}"  # 01/15/2020 / 15-01-20
+    r"|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4}"  # 15 Jan 2020
+    r"|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4}"  # Jan 15, 2020
+    r"|\d{8}"  # 20200115
+    r")"
+)
 
 # --- ragged-column detection thresholds (see _detect_ragged_columns) -----
 # How many raw data rows (after the header) to sample when checking whether
@@ -479,6 +520,82 @@ def _correlatable_columns(df: pd.DataFrame, numeric_cols: list[str]) -> list[str
     return non_constant
 
 
+def _looks_date_like(value: Any) -> bool:
+    """Cheap regex gate: does this string vaguely resemble a date token?"""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    return _DATE_LIKE_RE.search(text) is not None
+
+
+def _infer_datetime_format(sample: pd.Series) -> Optional[str]:
+    """Infer a single strptime format from a small sample of values.
+
+    Tries common explicit formats first (fast, deterministic). If none cover
+    enough of the sample to meet `_DATETIME_PARSE_THRESHOLD`, returns None so
+    the caller can fall back to a mixed parse on the sample only -- never on
+    the full column.
+    """
+    best_fmt: Optional[str] = None
+    best_ratio = 0.0
+    for fmt in _COMMON_DATE_FORMATS:
+        parsed = pd.to_datetime(sample, errors="coerce", format=fmt)
+        ratio = float(parsed.notna().mean())
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_fmt = fmt
+        if ratio >= _DATETIME_PARSE_THRESHOLD:
+            return fmt
+    if best_fmt is not None and best_ratio >= _DATETIME_PARSE_THRESHOLD:
+        return best_fmt
+    return None
+
+
+def _parse_datetime_series(series: pd.Series) -> Optional[pd.Series]:
+    """Parse a full object series as datetimes, with sample-based format inference.
+
+    1. Sample the first `_DATETIME_SAMPLE_SIZE` non-null values.
+    2. Early-skip if < `_DATETIME_EARLY_SKIP_THRESHOLD` of the sample looks
+       date-like (avoids parsing Name/Email/Address/etc. columns at all).
+    3. Infer one explicit format from the sample (or confirm via a mixed
+       parse on the sample only).
+    4. Apply that format to the FULL series with `errors="coerce"` -- vastly
+       faster than per-value dateutil inference via format="mixed" on 100k+ rows.
+
+    Returns the parsed Series (same index as `series`, NaT where coerce failed)
+    if the column clears `_DATETIME_PARSE_THRESHOLD`, else None.
+    """
+    if series.empty:
+        return None
+
+    sample = series.head(_DATETIME_SAMPLE_SIZE)
+    date_like_ratio = float(sample.map(_looks_date_like).mean())
+    if date_like_ratio < _DATETIME_EARLY_SKIP_THRESHOLD:
+        return None
+
+    inferred_format = _infer_datetime_format(sample)
+    if inferred_format is not None:
+        parsed = pd.to_datetime(series, errors="coerce", format=inferred_format)
+    else:
+        # Sample didn't match a common format cleanly -- confirm the sample
+        # itself parses as dates (mixed, small-n only), then apply mixed to
+        # the full column only if the sample clears the threshold. Prefer
+        # skipping over a 30s full-column mixed parse when the sample fails.
+        sample_parsed = pd.to_datetime(sample, errors="coerce", format="mixed")
+        if float(sample_parsed.notna().mean()) < _DATETIME_PARSE_THRESHOLD:
+            return None
+        # Last resort for uncommon formats that still clearly are dates in
+        # the sample. Still much cheaper than running mixed blindly on every
+        # object column without the early-skip / sample gate above.
+        parsed = pd.to_datetime(series, errors="coerce", format="mixed")
+
+    if float(parsed.notna().mean()) < _DATETIME_PARSE_THRESHOLD:
+        return None
+    return parsed
+
+
 def _detect_datetime_columns(df: pd.DataFrame, object_cols: list[str]) -> dict[str, dict[str, Any]]:
     """Detect object columns that are really dates and summarize their range.
 
@@ -487,15 +604,16 @@ def _detect_datetime_columns(df: pd.DataFrame, object_cols: list[str]) -> dict[s
     where at least `_DATETIME_PARSE_THRESHOLD` of the non-null values parse as
     dates, we report the min/max date and the distinct year/month/day counts
     the downstream feature-engineering hints can build on.
+
+    Performance: format is inferred from a small sample and applied explicitly
+    to the full column; non-date-like columns are skipped after a cheap regex
+    check on the sample (see `_parse_datetime_series`).
     """
     detected: dict[str, dict[str, Any]] = {}
     for col in object_cols:
         series = df[col].dropna()
-        if series.empty:
-            continue
-        parsed = pd.to_datetime(series, errors="coerce", format="mixed")
-        valid_ratio = parsed.notna().mean()
-        if valid_ratio < _DATETIME_PARSE_THRESHOLD:
+        parsed = _parse_datetime_series(series)
+        if parsed is None:
             continue
         parsed = parsed.dropna()
         detected[col] = {
@@ -529,8 +647,84 @@ def load_dataframe(file_path: str) -> pd.DataFrame:
         raise ProfilerError(f"Unexpected error reading {path.name}: {exc}") from exc
 
 
+def profile_dataframe(df: pd.DataFrame, label: str = "dataframe") -> dict[str, Any]:
+    """Profile an in-memory DataFrame and return a JSON-serializable summary.
+
+    Shared by `profile_csv` (which loads from disk first) and graph nodes that
+    already hold a repaired DataFrame in state -- so the expensive
+    encoding-fallback / ragged-header repair path runs once per upload, not
+    once per node.
+
+    Args:
+        df: DataFrame to profile (already loaded/repaired).
+        label: Short name used in log messages (e.g. the CSV filename).
+
+    Returns:
+        A dict with keys: shape, columns, missing_values,
+        missing_value_percentages, duplicates, numeric_summary,
+        categorical_summary, datetime_columns, outliers, correlations.
+
+    Raises:
+        ProfilerError: if statistics cannot be computed.
+    """
+    logger.info("Profiling DataFrame: %s", label)
+
+    try:
+        numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+        non_numeric_cols = df.select_dtypes(exclude=np.number).columns.tolist()
+
+        with log_duration(logger, f"profile_csv.datetime_detection [{label}]"):
+            datetime_columns = _detect_datetime_columns(df, non_numeric_cols)
+        # Genuine datetime columns are summarized separately -- don't also
+        # profile them as high-cardinality categoricals.
+        categorical_cols = [c for c in non_numeric_cols if c not in datetime_columns]
+
+        n_rows = int(df.shape[0])
+        missing_counts = df.isnull().sum()
+        missing_values = {str(col): int(count) for col, count in missing_counts.items() if count > 0}
+        missing_value_percentages = {
+            str(col): round(count / n_rows * 100, 2)
+            for col, count in missing_counts.items()
+            if count > 0 and n_rows > 0
+        }
+
+        outlier_eligible_cols = _outlier_eligible_columns(df, numeric_cols)
+        with log_duration(logger, f"profile_csv.outlier_detection [{label}]"):
+            outliers = _detect_outliers(df, outlier_eligible_cols)
+        with log_duration(logger, f"profile_csv.correlations [{label}]"):
+            correlations = _compute_correlations(df, numeric_cols)
+
+        profile = {
+            "shape": {"rows": int(df.shape[0]), "columns": int(df.shape[1])},
+            "columns": {str(col): str(dtype) for col, dtype in df.dtypes.items()},
+            "missing_values": missing_values,
+            "missing_value_percentages": missing_value_percentages,
+            "duplicates": int(df.duplicated().sum()),
+            "numeric_summary": _profile_numeric_columns(df, numeric_cols),
+            "categorical_summary": _profile_categorical_columns(df, categorical_cols),
+            "datetime_columns": datetime_columns,
+            "outliers": outliers,
+            "correlations": correlations,
+        }
+    except (KeyError, ValueError) as exc:
+        raise ProfilerError(f"Error computing profile statistics for {label}: {exc}") from exc
+
+    logger.info(
+        "Profiled %s: %d rows, %d columns, %d duplicates",
+        label,
+        profile["shape"]["rows"],
+        profile["shape"]["columns"],
+        profile["duplicates"],
+    )
+    return profile
+
+
 def profile_csv(file_path: str) -> dict[str, Any]:
     """Profile a CSV file and return a JSON-serializable statistical summary.
+
+    Loads and repairs the CSV once, then delegates to `profile_dataframe`.
+    Prefer loading via `load_dataframe` yourself and calling `profile_dataframe`
+    when the same frame will be reused by later pipeline stages.
 
     Args:
         file_path: Path to the CSV file to profile.
@@ -550,51 +744,4 @@ def profile_csv(file_path: str) -> dict[str, Any]:
     with log_duration(logger, f"profile_csv.file_read [{path.name}]"):
         df = load_dataframe(file_path)
 
-    try:
-        numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
-        non_numeric_cols = df.select_dtypes(exclude=np.number).columns.tolist()
-
-        with log_duration(logger, f"profile_csv.datetime_detection [{path.name}]"):
-            datetime_columns = _detect_datetime_columns(df, non_numeric_cols)
-        # Genuine datetime columns are summarized separately -- don't also
-        # profile them as high-cardinality categoricals.
-        categorical_cols = [c for c in non_numeric_cols if c not in datetime_columns]
-
-        n_rows = int(df.shape[0])
-        missing_counts = df.isnull().sum()
-        missing_values = {str(col): int(count) for col, count in missing_counts.items() if count > 0}
-        missing_value_percentages = {
-            str(col): round(count / n_rows * 100, 2)
-            for col, count in missing_counts.items()
-            if count > 0 and n_rows > 0
-        }
-
-        outlier_eligible_cols = _outlier_eligible_columns(df, numeric_cols)
-        with log_duration(logger, f"profile_csv.outlier_detection [{path.name}]"):
-            outliers = _detect_outliers(df, outlier_eligible_cols)
-        with log_duration(logger, f"profile_csv.correlations [{path.name}]"):
-            correlations = _compute_correlations(df, numeric_cols)
-
-        profile = {
-            "shape": {"rows": int(df.shape[0]), "columns": int(df.shape[1])},
-            "columns": {str(col): str(dtype) for col, dtype in df.dtypes.items()},
-            "missing_values": missing_values,
-            "missing_value_percentages": missing_value_percentages,
-            "duplicates": int(df.duplicated().sum()),
-            "numeric_summary": _profile_numeric_columns(df, numeric_cols),
-            "categorical_summary": _profile_categorical_columns(df, categorical_cols),
-            "datetime_columns": datetime_columns,
-            "outliers": outliers,
-            "correlations": correlations,
-        }
-    except (KeyError, ValueError) as exc:
-        raise ProfilerError(f"Error computing profile statistics for {path.name}: {exc}") from exc
-
-    logger.info(
-        "Profiled %s: %d rows, %d columns, %d duplicates",
-        path.name,
-        profile["shape"]["rows"],
-        profile["shape"]["columns"],
-        profile["duplicates"],
-    )
-    return profile
+    return profile_dataframe(df, path.name)
