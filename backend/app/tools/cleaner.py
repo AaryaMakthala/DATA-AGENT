@@ -96,17 +96,13 @@ class CleanerError(Exception):
 
 
 def _log_df_state(file_id: str, stage: str, df: pd.DataFrame) -> None:
-    """TEMPORARY diagnostic hook: log shape/columns/dtypes/dup-count at a pipeline stage.
+    """Diagnostic hook: log shape/columns/dtypes/dup-count at a pipeline stage.
 
-    Added per debugging request to trace Bug #3 (duplicate-count mismatch).
-    Call sites are placed after every dataframe-mutating step in clean_csv:
-    after CSV load, after identifier removal, after missing-value handling,
-    after duplicate removal, after outlier handling, before the visualization
-    snapshot, after encoding, and (by the caller, post-reload) after saving/
-    reloading the cleaned CSV. Cheap at INFO level; safe to strip once Bug #3
-    and any related issues are confirmed fixed in production.
+    Originally added to trace Bug #3 (duplicate-count mismatch) -- confirmed
+    fixed. Demoted to DEBUG so column names from user-uploaded CSVs are not
+    emitted at INFO level in production. Re-enable with LOG_LEVEL=DEBUG.
     """
-    logger.info(
+    logger.debug(
         "DIAG[%s] %s: shape=%s columns=%s dtypes=%s duplicated_sum=%d",
         file_id, stage, df.shape, list(df.columns), dict(df.dtypes.astype(str)),
         int(df.duplicated().sum()),

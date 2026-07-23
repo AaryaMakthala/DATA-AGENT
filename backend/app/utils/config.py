@@ -18,6 +18,10 @@ class Config:
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 
+    # Logging verbosity. Set LOG_LEVEL=DEBUG to re-enable diagnostic hooks
+    # (_log_df_state in profiler/cleaner) and other debug output. Default INFO.
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
+
     # Browser origins allowed to call the API (CORS). Comma-separated; in
     # production this MUST be your real frontend origin(s), never "*" -- a
     # wildcard combined with allow_credentials is both insecure and rejected by

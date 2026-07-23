@@ -225,20 +225,50 @@ def resolve_report_path(file_id: str) -> Path:
 
 
 def resolve_cleaned_file_path(file_id: str) -> Path:
-    """
-    Resolve cleaned dataset path.
+    """Resolve the cleaned CSV written by clean_csv() for a given file_id.
+
+    `clean_csv` saves the cleaned file via `build_artifact_filename`, which
+    produces one of two names:
+      1. ``{base}_cleaned.csv``          (preferred -- no collision)
+      2. ``{base}_cleaned_{file_id[:6]}.csv``  (disambiguation fallback)
+
+    where ``base`` is the sanitized stem of the original uploaded filename
+    (stored in the ``{file_id}.name.txt`` sidecar by `save_original_filename`).
+
+    The old implementation hardcoded ``{file_id}_cleaned.csv``, which was never
+    the real filename after `build_artifact_filename` was introduced -- causing
+    every ``GET /download/{file_id}`` to return 404.
     """
     validate_file_id(file_id)
 
-    path = Config.CLEANED_FILES_FOLDER / f"{file_id}_cleaned.csv"
+    original_name = resolve_original_filename(file_id)
+    base = _sanitize_base_name(original_name)
 
-    if not path.is_file():
-        raise FileServiceError(
-            f"No cleaned CSV exists for file_id='{file_id}'. "
-            "Run analysis first."
+    # Mirror build_artifact_filename's two possible outputs, in preference order.
+    candidates = [
+        Config.CLEANED_FILES_FOLDER / f"{base}_cleaned.csv",
+        Config.CLEANED_FILES_FOLDER / f"{base}_cleaned_{file_id[:6]}.csv",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+
+    # Last-resort glob: catches any edge-case mismatch (e.g. a base name that
+    # sanitized differently at save time vs resolution time).
+    matches = sorted(Config.CLEANED_FILES_FOLDER.glob(f"{base}_cleaned*.csv"))
+    if matches:
+        logger.warning(
+            "resolve_cleaned_file_path: candidate paths missed for file_id=%s; "
+            "found via glob: %s",
+            file_id, matches[0].name,
         )
+        return matches[0]
 
-    return path
+    raise FileServiceError(
+        f"No cleaned CSV exists for file_id='{file_id}'. "
+        "Run analysis first."
+    )
+
 
 
 def chart_path_to_url(path: str) -> str:

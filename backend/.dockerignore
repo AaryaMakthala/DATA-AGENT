@@ -1,0 +1,53 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtualenv (packages come from the builder stage's pip install)
+venv/
+.venv/
+
+# Secrets -- NEVER include in the image
+.env
+.env.*
+!.env.example
+
+# User data -- uploaded CSVs and generated outputs should never be baked in
+uploads/*
+!uploads/.gitkeep
+outputs/*
+!outputs/cleaned_files/.gitkeep
+!outputs/charts/.gitkeep
+!outputs/reports/.gitkeep
+
+# Dev/test artifacts
+*.log
+server.log
+coverage.xml
+htmlcov/
+.coverage
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+
+# Git history (not needed in the image)
+.git/
+.gitignore
+
+# CI/CD configs (optional -- keep if you want them in the image for inspection)
+# .github/
+
+# Test suite (not needed at runtime, reduces image size)
+tests/
+harness.py

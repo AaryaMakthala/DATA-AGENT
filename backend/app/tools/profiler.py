@@ -110,14 +110,14 @@ class ProfilerError(Exception):
 
 
 def _log_df_state(stage: str, df: pd.DataFrame) -> None:
-    """TEMPORARY diagnostic hook: log shape/columns/dtypes/dup-count at a pipeline stage.
+    """Diagnostic hook: log shape/columns/dtypes/dup-count at a pipeline stage.
 
-    Added per debugging request to trace Bug #3 (duplicate-count mismatch)
-    and the large-file ragged-header rejection. Safe to remove once both are
-    confirmed fixed in production; left in as INFO-level so it's cheap and
-    non-intrusive if kept.
+    Originally added to trace Bug #3 (duplicate-count mismatch) and the
+    large-file ragged-header rejection -- both confirmed fixed. Kept as a
+    DEBUG-level hook so it can be re-enabled with LOG_LEVEL=DEBUG without a
+    code change. Invisible at the default INFO level in production.
     """
-    logger.info(
+    logger.debug(
         "DIAG[%s]: shape=%s dtypes=%s duplicated_sum=%d",
         stage, df.shape, dict(df.dtypes.astype(str)), int(df.duplicated().sum()),
     )

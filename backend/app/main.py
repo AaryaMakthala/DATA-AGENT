@@ -1,7 +1,12 @@
 """FastAPI application entrypoint."""
 
-from fastapi import FastAPI
+import threading
+import time
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.errors import APIError, api_error_handler
@@ -12,7 +17,53 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-app = FastAPI(title="AI Data Analyst Agent", version="0.1.0")
+# How often the background sweep thread runs (seconds). Independent of
+# ARTIFACT_RETENTION_HOURS -- that controls *age* of files to delete; this
+# controls *frequency* of checks. 1 hour is fine for a 24h retention window.
+_CLEANUP_INTERVAL_SECONDS = 3600
+
+
+def _background_cleanup_loop() -> None:
+    """Run purge_expired_artifacts() on a fixed interval in a daemon thread.
+
+    On-startup-only cleanup (the old @on_event approach) means a long-running
+    server process that isn't restarted will accumulate uploads and outputs
+    until disk fills. This thread ensures cleanup happens periodically even
+    between restarts.
+    """
+    while True:
+        time.sleep(_CLEANUP_INTERVAL_SECONDS)
+        try:
+            purge_expired_artifacts()
+        except Exception:  # noqa: BLE001 -- never crash the cleanup thread
+            logger.exception("Periodic artifact sweep failed; will retry next interval")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Startup/shutdown lifecycle (replaces deprecated @app.on_event)."""
+    # --- startup ---
+    try:
+        purge_expired_artifacts()
+    except Exception:  # noqa: BLE001 -- sweep failure must never block startup
+        logger.exception("Startup artifact sweep failed; continuing without it")
+
+    # Launch the periodic cleanup daemon thread (FIX 8: runs every hour,
+    # not only at startup, so disk doesn't fill between restarts).
+    _cleanup_thread = threading.Thread(
+        target=_background_cleanup_loop,
+        name="artifact-cleanup",
+        daemon=True,  # daemon=True: thread exits when the main process exits
+    )
+    _cleanup_thread.start()
+    logger.info("Periodic artifact cleanup thread started (interval=%ds)", _CLEANUP_INTERVAL_SECONDS)
+
+    yield  # app is running
+
+    # --- shutdown (nothing extra needed; daemon thread exits automatically) ---
+
+
+app = FastAPI(title="AI Data Analyst Agent", version="0.1.0", lifespan=lifespan)
 
 # Typed error envelope: any APIError raised in a route serializes to
 # {"success": false, "error": {"type", "message"}, "detail": "..."} instead of
@@ -20,13 +71,24 @@ app = FastAPI(title="AI Data Analyst Agent", version="0.1.0")
 app.add_exception_handler(APIError, api_error_handler)
 
 
-@app.on_event("startup")
-def _sweep_expired_artifacts() -> None:
-    """Delete stale uploads/outputs on boot so the folders don't grow forever."""
-    try:
-        purge_expired_artifacts()
-    except Exception:  # noqa: BLE001 -- a sweep failure must never block startup
-        logger.exception("Startup artifact sweep failed; continuing without it")
+# FIX 6: Catch-all handler for any unhandled exception.
+# Without this, FastAPI returns its default {"detail": "Internal Server Error"}
+# with a raw traceback sometimes leaking into debug output. This guarantees
+# a clean JSON envelope and logs the full traceback server-side.
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception(
+        "Unhandled exception on %s %s", request.method, request.url.path
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "error": {"type": "INTERNAL_ERROR", "message": "An unexpected internal error occurred."},
+            "detail": "An unexpected internal error occurred.",
+        },
+    )
+
 
 app.add_middleware(
     CORSMiddleware,

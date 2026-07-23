@@ -18,11 +18,15 @@ def _configure_root_logger() -> None:
     if _configured:
         return
 
+    # Import here to avoid circular imports (config imports logger at module
+    # level via get_logger, so we defer the Config import to call time).
+    from app.utils.config import Config  # noqa: PLC0415
+
     handler = logging.StreamHandler(stream=sys.stdout)
     handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_DATE_FORMAT))
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(getattr(logging, Config.LOG_LEVEL, logging.INFO))
     root_logger.addHandler(handler)
 
     _configured = True
