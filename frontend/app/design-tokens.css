@@ -39,6 +39,19 @@
   /* ---- Elevation ---- */
   --shadow-card: 0 1px 2px rgba(20, 20, 20, 0.04);
   --shadow-float: 0 24px 50px -12px rgba(20, 20, 20, 0.28), 0 8px 20px -8px rgba(20, 20, 20, 0.18);
+
+  /* ---- Hard offset shadow (pill / button style, matches the Field Notes ref) ---- */
+  --shadow-hard-sm: 3px 3px 0 0 var(--color-ink);
+  --shadow-hard: 4px 4px 0 0 var(--color-ink);
+  --shadow-hard-hover: 6px 6px 0 0 var(--color-ink);
+  --shadow-hard-press: 1px 1px 0 0 var(--color-ink);
+
+  /* White variant — for buttons sitting on a black fill or a black background,
+     where an ink-colored shadow would disappear. */
+  --shadow-hard-sm-white: 3px 3px 0 0 #ffffff;
+  --shadow-hard-white: 4px 4px 0 0 #ffffff;
+  --shadow-hard-hover-white: 6px 6px 0 0 #ffffff;
+  --shadow-hard-press-white: 1px 1px 0 0 #ffffff;
 }
 
 @layer components {
@@ -56,16 +69,24 @@
     text-transform: uppercase;
     line-height: 1;
     cursor: pointer;
-    border: 1px solid transparent;
+    border: 2px solid var(--color-ink);
+    box-shadow: var(--shadow-hard);
     transition:
       background-color 0.18s ease,
       color 0.18s ease,
       border-color 0.18s ease,
-      transform 0.18s ease;
+      transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
+      box-shadow 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  .btn:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: var(--shadow-hard-hover);
   }
 
   .btn:active {
-    transform: translateY(1px);
+    transform: translate(1px, 1px);
+    box-shadow: var(--shadow-hard-press);
   }
 
   .btn-yellow {
@@ -80,21 +101,74 @@
   .btn-black {
     background-color: var(--color-ink);
     color: #ffffff;
+    box-shadow: var(--shadow-hard-white);
   }
 
   .btn-black:hover {
     background-color: var(--color-ink-soft);
+    box-shadow: var(--shadow-hard-hover-white);
+  }
+
+  .btn-black:active {
+    box-shadow: var(--shadow-hard-press-white);
+  }
+
+  /* Modifier for buttons that sit on a black background section (e.g. the
+     closing CTA panel) — swaps the hard shadow to white so it stays visible
+     against the dark fill instead of merging into it. */
+  .btn-shadow-white {
+    box-shadow: var(--shadow-hard-white);
+  }
+
+  .btn-shadow-white:hover {
+    box-shadow: var(--shadow-hard-hover-white);
+  }
+
+  .btn-shadow-white:active {
+    box-shadow: var(--shadow-hard-press-white);
   }
 
   /* Ghost pill: transparent with the shared border (e.g. "EXPLORE ANALYSIS") */
   .btn-ghost {
-    background-color: transparent;
+    background-color: var(--color-cream-card);
     color: var(--color-ink);
-    border-color: var(--color-line);
   }
 
   .btn-ghost:hover {
-    border-color: var(--color-ink);
+    background-color: var(--color-cream-sunken);
+  }
+
+  /* Compact pill for use inside cards/headers (e.g. "See Full Report") */
+  .btn-sm {
+    padding: 0.4rem 0.9rem;
+    font-size: 0.6rem;
+    box-shadow: var(--shadow-hard-sm);
+  }
+
+  .btn-sm:hover {
+    box-shadow: var(--shadow-hard);
+  }
+
+  /* Bordered circle badge for timeline/step icons */
+  .icon-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-pill);
+    background-color: var(--color-cream-card);
+    border: 2px solid var(--color-ink);
+    box-shadow: var(--shadow-hard-sm);
+    color: var(--color-ink);
+    transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease, background-color 0.25s ease;
+  }
+
+  .icon-badge:hover,
+  .group:hover .icon-badge {
+    transform: translate(-2px, -2px) rotate(-6deg);
+    box-shadow: var(--shadow-hard);
+    background-color: var(--color-mustard);
   }
 
   /* ---- Card: one consistent surface for every card on every page ---- */
@@ -104,6 +178,16 @@
     border-radius: var(--radius-card);
     padding: var(--space-card);
     box-shadow: var(--shadow-card);
+    transition:
+      transform 0.25s ease,
+      box-shadow 0.25s ease,
+      border-color 0.25s ease;
+  }
+
+  .card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-float);
+    border-color: var(--color-ink);
   }
 
   /* Elevated card: same surface, floating drop shadow (e.g. the hero device mockup). */
@@ -120,7 +204,7 @@
     align-items: center;
     gap: 0.4rem;
     border-radius: var(--radius-pill);
-    padding: 0.35rem 0.85rem;
+    padding: 0.5rem 1rem;
     background-color: var(--color-mustard);
     color: var(--color-ink);
     font-family: var(--font-mono);
@@ -129,6 +213,20 @@
     letter-spacing: 0.14em;
     text-transform: uppercase;
     line-height: 1;
+    border: 2px solid var(--color-ink);
+    box-shadow: var(--shadow-hard-sm);
+    transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease;
+  }
+
+  .pill-label:hover {
+    transform: translate(-1px, -1px) rotate(-1deg);
+    box-shadow: var(--shadow-hard);
+  }
+
+  /* Alternate tint for a second pill sitting next to the first (blue badge, etc.) */
+  .pill-label-alt {
+    background-color: var(--color-blue-accent);
+    color: var(--color-ink);
   }
 
   /* ---- Nav pill (active item in the black navigation bar) ---- */
@@ -145,6 +243,8 @@
     letter-spacing: 0.12em;
     text-transform: uppercase;
     line-height: 1;
+    border: 2px solid var(--color-ink);
+    box-shadow: var(--shadow-hard-sm);
   }
 
   /* ---- Small mono uppercase label (nav links, table headers, captions) ---- */
@@ -157,6 +257,76 @@
     color: var(--color-muted);
   }
 
+  /* ---- Data table: same border + hard shadow language as buttons/pills ---- */
+  .table-wrap {
+    border: 2px solid var(--color-ink);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-hard);
+    overflow: hidden;
+    background-color: var(--color-cream-card);
+  }
+
+  .table-wrap table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .table-wrap thead {
+    background-color: var(--color-ink);
+  }
+
+  .table-wrap th {
+    padding: 0.85rem 1.1rem;
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 0.64rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #ffffff;
+  }
+
+  .table-wrap td {
+    padding: 0.75rem 1.1rem;
+    font-size: 0.85rem;
+    color: var(--color-ink);
+    border-top: 1px solid var(--color-line);
+  }
+
+  .table-wrap tbody tr:nth-child(even) {
+    background-color: var(--color-cream-sunken);
+  }
+
+  .table-wrap tbody tr {
+    transition: background-color 0.18s ease;
+  }
+
+  .table-wrap tbody tr:hover {
+    background-color: rgba(244, 197, 66, 0.28);
+  }
+
+  /* Small status chip used inside table cells — border + shadow like every other pill */
+  .table-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    border-radius: var(--radius-pill);
+    padding: 0.2rem 0.65rem;
+    font-family: var(--font-mono);
+    font-size: 0.58rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border: 2px solid var(--color-ink);
+    box-shadow: var(--shadow-hard-sm);
+    background-color: var(--color-cream-card);
+    color: var(--color-ink);
+  }
+
+  .table-chip-ok {
+    background-color: var(--color-mustard);
+  }
+
   /* ---- Display headline (serif, with italic emphasis available) ---- */
   .display-heading {
     font-family: var(--font-display);
@@ -165,4 +335,161 @@
     letter-spacing: -0.01em;
     color: var(--color-ink);
   }
+}
+
+/* ============================================================
+   Animation utilities — used by app/page.tsx for scroll reveals
+   and ambient motion. Kept global (not @layer components) so
+   they can freely compose with Tailwind utility classes.
+   ============================================================ */
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes floatY {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes spinSlow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulseSoft {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes drawLine {
+  from {
+    stroke-dashoffset: 240;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes growBar {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* Scroll reveal: elements start hidden, JS toggles .is-visible via IntersectionObserver */
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.animate-float {
+  animation: floatY 4.5s ease-in-out infinite;
+}
+
+.animate-spin-slow {
+  animation: spinSlow 14s linear infinite;
+}
+
+.animate-pulse-soft {
+  animation: pulseSoft 3s ease-in-out infinite;
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.bar-grow {
+  transform-origin: bottom;
+  animation: growBar 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.line-draw {
+  stroke-dasharray: 240;
+  animation: drawLine 1.4s ease-out forwards;
+}
+
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  animation: marquee 22s linear infinite;
+}
+
+@keyframes gridDrift {
+  from {
+    background-position:
+      0 0,
+      0 0;
+  }
+  to {
+    background-position:
+      32px 32px,
+      32px 32px;
+  }
+}
+
+/* Grid backdrop for the whole homepage — fixed to the viewport (subtle parallax as
+   the page scrolls over it), fades out at the very top/bottom via mask, drifts slowly
+   so the page feels alive without being distracting.
+   NOTE: lines use rgba(ink) directly, not --color-line — --color-line (#e6e0d4) is
+   nearly the same tone as --color-cream (#f5f1ea), so it was invisible against the
+   page background even before the old opacity:0.55 diluted it further. */
+.bg-grid-pattern-page {
+  background-image:
+    linear-gradient(rgba(20, 20, 20, 0.16) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(20, 20, 20, 0.16) 1px, transparent 1px);
+  background-size: 32px 32px;
+  animation: gridDrift 26s linear infinite;
+  mask-image: linear-gradient(to bottom, transparent 0%, black 6%, black 92%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 6%, black 92%, transparent 100%);
 }
