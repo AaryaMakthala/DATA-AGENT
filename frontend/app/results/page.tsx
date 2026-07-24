@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 
 import { SiteNav, SiteFooter } from "@/components/SiteNav";
@@ -26,6 +26,11 @@ import { ApiError, getResults, resolveAssetUrl } from "@/lib/api";
  * section isn't sent yet, the corresponding UI block is simply omitted —
  * this file never throws on a partial response, matching the defensive
  * style of the original implementation.
+ *
+ * VISUAL SYSTEM: every surface on this page pulls from the shared tokens in
+ * globals.css (.card / .card-elevated / .pill-label / .icon-badge /
+ * .label-mono / .table-chip / .btn) so it reads as one continuous site with
+ * Home / Features / Upload — no bespoke pastel banners or raw hex colors.
  */
 
 // ----------------------------- shared view-model -----------------------------
@@ -462,9 +467,9 @@ type ValidatedResults = z.infer<typeof resultsResponseSchema>;
 
 function DonutChart() {
   const segments = [
-    { color: "#2f6fd6", offset: 0, len: 45 },
-    { color: "#5f9ae8", offset: 45, len: 32 },
-    { color: "#a5c4e8", offset: 77, len: 23 },
+    { color: "var(--color-info)", offset: 0, len: 45 },
+    { color: "var(--color-mustard)", offset: 45, len: 32 },
+    { color: "var(--color-blue-accent)", offset: 77, len: 23 },
   ];
   const c = 2 * Math.PI * 40;
   return (
@@ -478,9 +483,9 @@ function DonutChart() {
         </g>
       </svg>
       <ul className="space-y-2 text-xs text-muted">
-        <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ background: "#2f6fd6" }} /> Low</li>
-        <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ background: "#5f9ae8" }} /> Medium</li>
-        <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ background: "#a5c4e8" }} /> High</li>
+        <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--color-info)" }} /> Low</li>
+        <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--color-mustard)" }} /> Medium</li>
+        <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--color-blue-accent)" }} /> High</li>
       </ul>
     </div>
   );
@@ -493,7 +498,7 @@ function FeatureImportanceChart() {
       {bars.map((v, i) => (
         <g key={i}>
           <text x="0" y={22 + i * 26} fontSize="8" fill="#6b6b6b">Feature {String.fromCharCode(65 + i)}</text>
-          <rect x="52" y={12 + i * 26} width={(v / 100) * 150} height="12" rx="2" fill="#2f6fd6" />
+          <rect x="52" y={12 + i * 26} width={(v / 100) * 150} height="12" rx="2" fill="var(--color-info)" />
         </g>
       ))}
     </svg>
@@ -501,7 +506,7 @@ function FeatureImportanceChart() {
 }
 
 function HeatmapChart() {
-  const palette = ["#b23a2e", "#d98a6a", "#e9e2d4", "#8fb4dd", "#3f6fb0"];
+  const palette = ["var(--color-danger)", "#d9ab8f", "#e9e2d4", "#a7c0d9", "var(--color-info)"];
   const grid = [
     [4, 2, 3, 1, 0], [2, 4, 0, 3, 1], [3, 0, 4, 2, 1], [1, 3, 2, 4, 0], [0, 1, 1, 0, 4],
   ];
@@ -515,17 +520,28 @@ function HeatmapChart() {
 }
 
 // -------------------------- shared status color helpers ---------------------
-// Reuses the exact literals already in the codebase's quality-score coloring
-// (>=80 green / >=60 amber / else red) so new sections read as one system.
+// Uses the semantic tokens added to globals.css (--color-success / -warning /
+// -danger) so this reads as one system with the rest of the site instead of
+// bright, un-themed hex.
 
 function statusColor(score: number): string {
-  if (score >= 80) return "#3f9d54";
-  if (score >= 60) return "#f4c542";
-  return "#c05a44";
+  if (score >= 80) return "var(--color-success)";
+  if (score >= 60) return "var(--color-warning)";
+  return "var(--color-danger)";
+}
+
+function statusBg(score: number): string {
+  if (score >= 80) return "var(--color-success-bg)";
+  if (score >= 60) return "var(--color-warning-bg)";
+  return "var(--color-danger-bg)";
 }
 
 function severityColor(severity: string): string {
-  return severity.toLowerCase() === "high" ? "#c05a44" : "#f4c542";
+  return severity.toLowerCase() === "high" ? "var(--color-danger)" : "var(--color-warning)";
+}
+
+function severityBg(severity: string): string {
+  return severity.toLowerCase() === "high" ? "var(--color-danger-bg)" : "var(--color-warning-bg)";
 }
 
 // Format a processing duration for display. Sub-second runs show "<1s" rather
@@ -1009,12 +1025,54 @@ function ChartImage({ title, url }: { title: string; url: string }) {
   );
 }
 
+// --------------------------- scroll-reveal wrapper ---------------------------
+// Same IntersectionObserver fade-up pattern used on Home / Features / Upload,
+// so Results feels like one continuous site instead of appearing instantly.
+
+function Reveal({
+  children,
+  delay = 0,
+  className = "",
+}: {
+  children: React.ReactNode;
+  delay?: number;
+  className?: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            observer.unobserve(entry.target);
+          }
+        });
+      },
+      { threshold: 0.1, rootMargin: "0px 0px -40px 0px" }
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div ref={ref} className={`reveal ${className}`} style={{ transitionDelay: `${delay}ms` }}>
+      {children}
+    </div>
+  );
+}
+
 // --------------------------- small presentational bits ----------------------
 
 function SectionHeading({ children, sub }: { children: React.ReactNode; sub?: string }) {
   return (
-    <div className="mt-12 flex items-end justify-between">
-      <h2 className="font-display text-lg font-bold text-ink">{children}</h2>
+    <div className="mt-16 flex items-end justify-between">
+      <h2 className="display-heading text-2xl font-bold text-ink">{children}</h2>
       {sub && <span className="label-mono text-[10px]">{sub}</span>}
     </div>
   );
@@ -1039,29 +1097,129 @@ function ProgressBar({ label, value, onClick, active }: { label: string; value: 
         <span className={active ? "font-bold text-ink" : "text-muted"}>{label}</span>
         <span className="font-bold text-ink">{clamped}</span>
       </div>
-      <div className="mt-1 h-2 w-full overflow-hidden rounded-pill bg-cream-sunken">
+      <div className="mt-1 h-2 w-full overflow-hidden rounded-pill border border-ink/10 bg-cream-sunken">
         <div className="h-full rounded-pill transition-all" style={{ width: `${clamped}%`, background: color }} />
       </div>
     </div>
   );
 }
 
+function CloseButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Close"
+      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-ink bg-cream-card text-ink transition-all duration-200 hover:-translate-y-0.5 hover:bg-mustard"
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
+        <line x1="18" y1="6" x2="6" y2="18" />
+        <line x1="6" y1="6" x2="18" y2="18" />
+      </svg>
+    </button>
+  );
+}
+
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       onClick={onClose}
     >
-      <div className="card-elevated max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-start justify-between">
+      <div className="card-elevated w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4">
           <div className="label-mono text-[10px]">{title}</div>
-          <button type="button" onClick={onClose} className="text-muted hover:text-ink" aria-label="Close">✕</button>
+          <CloseButton onClick={onClose} />
         </div>
         {children}
       </div>
     </div>
+  );
+}
+
+// ------------------------- loading experience (analyzing) -------------------
+
+const PIPELINE_STAGES = ["Uploading", "Profiling", "Analyzing", "Cleaning", "Generating Charts", "Recommending Models", "Complete"];
+
+const LOADING_MESSAGES = [
+  "Scanning columns…",
+  "Detecting data types…",
+  "Finding patterns…",
+  "Training candidate models…",
+  "Almost done…",
+];
+
+/** Two-tone spinning ring, same visual technique as the Home page donut/loader. */
+function SpinRing() {
+  return (
+    <svg viewBox="0 0 36 36" className="h-[72px] w-[72px] animate-spin-slow" style={{ animationDuration: "2.4s" }} aria-hidden="true">
+      <circle cx="18" cy="18" r="14" fill="none" stroke="var(--color-cream-sunken)" strokeWidth="4.5" />
+      <circle
+        cx="18" cy="18" r="14" fill="none" stroke="var(--color-mustard)" strokeWidth="4.5"
+        strokeDasharray="40 88" strokeLinecap="round" transform="rotate(-90 18 18)"
+      />
+      <circle
+        cx="18" cy="18" r="14" fill="none" stroke="var(--color-ink)" strokeWidth="4.5"
+        strokeDasharray="18 88" strokeDashoffset="-52" strokeLinecap="round" transform="rotate(-90 18 18)"
+      />
+    </svg>
+  );
+}
+
+function LoadingExperience() {
+  const [msgIndex, setMsgIndex] = useState(0);
+  // Pipeline stages before "Complete" are treated as in-progress for the
+  // purposes of this ambient loader (we don't get granular per-stage
+  // callbacks from the backend, so stage 0 is always "current").
+  const currentStage = 2; // "Analyzing" — the stage most requests spend the longest in
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setMsgIndex((i) => (i + 1) % LOADING_MESSAGES.length);
+    }, 1600);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <Reveal className="mt-6">
+      <div className="card-elevated mx-auto max-w-md p-8 text-center" role="status" aria-live="polite" aria-busy="true">
+        <div className="flex justify-center">
+          <SpinRing />
+        </div>
+
+        <h2 className="display-heading mt-5 text-2xl font-bold text-ink">Analyzing your dataset</h2>
+        <p key={msgIndex} className="animate-fade-in-up mt-2 label-mono text-[11px]" style={{ animationDuration: "0.4s" }}>
+          {LOADING_MESSAGES[msgIndex]}
+        </p>
+
+        <ol className="mx-auto mt-8 flex flex-col gap-2.5 text-left">
+          {PIPELINE_STAGES.map((stage, i) => {
+            const done = i < currentStage;
+            const active = i === currentStage;
+            return (
+              <li key={stage} className="flex items-center gap-3">
+                <span
+                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-[10px] font-bold transition-colors ${
+                    done
+                      ? "border-ink bg-ink text-white"
+                      : active
+                        ? "border-ink bg-mustard text-ink animate-pulse-soft"
+                        : "border-line bg-cream-sunken text-muted"
+                  }`}
+                >
+                  {done ? "✓" : i + 1}
+                </span>
+                <span className={`text-xs ${done ? "text-ink" : active ? "font-bold text-ink" : "text-muted"}`}>
+                  {stage}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    </Reveal>
   );
 }
 
@@ -1073,17 +1231,27 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
 
   if (vm.invalidMessage) {
     return (
-      <div className="mb-16 mt-6 rounded-[16px] border px-6 py-12 text-center" style={{ borderColor: "#e6cfc8", backgroundColor: "#f8eeeb" }} role="alert">
-        <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full" style={{ background: "#c05a44" }} aria-hidden="true">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <line x1="12" y1="8" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /><circle cx="12" cy="12" r="9" />
-          </svg>
-        </span>
-        <h1 className="display-heading mt-6 text-3xl sm:text-4xl">This dataset can&apos;t be analyzed</h1>
-        <p className="mx-auto mt-4 max-w-xl text-sm text-muted">{vm.invalidMessage}</p>
-        <p className="mt-2 text-xs text-muted">File: {vm.filename}</p>
-        <Link href="/upload" className="btn btn-yellow mt-8 inline-flex">Try a different file</Link>
-      </div>
+      <Reveal className="mt-6">
+        <div
+          className="rounded-[20px] border-2 border-ink px-6 py-14 text-center"
+          style={{ backgroundColor: "var(--color-danger-bg)" }}
+          role="alert"
+        >
+          <span
+            className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border-2 border-ink"
+            style={{ background: "var(--color-danger)" }}
+            aria-hidden="true"
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="12" y1="8" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /><circle cx="12" cy="12" r="9" />
+            </svg>
+          </span>
+          <h1 className="display-heading mt-6 text-3xl sm:text-4xl">This dataset can&apos;t be analyzed</h1>
+          <p className="mx-auto mt-4 max-w-xl text-sm text-muted">{vm.invalidMessage}</p>
+          <p className="mt-2 text-xs text-muted">File: {vm.filename}</p>
+          <Link href="/upload" className="btn btn-yellow mt-8 inline-flex">Try a different file</Link>
+        </div>
+      </Reveal>
     );
   }
 
@@ -1092,86 +1260,73 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
   return (
     <>
       {/* Success banner */}
-      <div className="mt-6 flex items-center justify-between rounded-[16px] border px-6 py-5" style={{ borderColor: "#cfe3c8", backgroundColor: "#eef6e9" }}>
-        <div className="flex items-center gap-4">
-          <span className="flex h-10 w-10 items-center justify-center rounded-full" style={{ background: "#3f9d54" }} aria-hidden="true">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="5 12 10 17 19 7" /></svg>
-          </span>
-          <div>
-            <div className="text-sm font-bold text-ink">Upload Successful!</div>
-            <p className="text-xs text-muted">File: {vm.filename}</p>
+      <Reveal className="mt-6">
+        <div className="card-elevated flex flex-wrap items-center justify-between gap-4 !p-6" style={{ backgroundColor: "var(--color-success-bg)" }}>
+          <div className="flex items-center gap-4">
+            <span className="icon-badge" style={{ backgroundColor: "var(--color-success)", color: "#fff" }} aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="5 12 10 17 19 7" /></svg>
+            </span>
+            <div>
+              <div className="text-sm font-bold text-ink">Upload Successful!</div>
+              <p className="text-xs text-muted">File: {vm.filename}</p>
+            </div>
           </div>
+          <span className="pill-label">{vm.rows} rows · {vm.cols} columns</span>
         </div>
-        <div className="label-mono text-[10px]">{vm.rows} rows · {vm.cols} columns</div>
-      </div>
+      </Reveal>
 
       {/* Dataset overview */}
       {vm.overview && (
-        <div className="card-elevated mt-6 p-6">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="label-mono text-[10px]">Dataset Overview</div>
-              <div className="mt-1 font-display text-xl font-bold text-ink">{vm.overview.datasetName}</div>
-            </div>
-            {vm.overview.readiness && (
-              <div className="text-right">
-                <span className="inline-flex items-center rounded-pill bg-mustard px-3 py-1 text-[11px] font-bold text-ink">
-                  {vm.overview.readiness.label}
-                </span>
-                <p className="mt-1 text-xs text-muted">{vm.overview.readiness.sublabel}</p>
+        <Reveal delay={60} className="mt-6">
+          <div className="card-elevated p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="label-mono text-[10px]">Dataset Overview</div>
+                <div className="mt-1 font-display text-xl font-bold text-ink">{vm.overview.datasetName}</div>
               </div>
-            )}
+              {vm.overview.readiness && (
+                <div className="text-right">
+                  <span className="pill-label">{vm.overview.readiness.label}</span>
+                  <p className="mt-1.5 text-xs text-muted">{vm.overview.readiness.sublabel}</p>
+                </div>
+              )}
+            </div>
+            <div className="mt-6 grid grid-cols-2 gap-6 border-t border-line pt-6 sm:grid-cols-4 lg:grid-cols-6">
+              <StatCell label="Rows" value={formatNumber(vm.overview.rows)} />
+              <StatCell label="Columns" value={vm.overview.columns} />
+              <StatCell label="Memory" value={vm.overview.memoryUsage} />
+              <StatCell label="Numeric" value={vm.overview.numericFeatures} />
+              <StatCell label="Categorical" value={vm.overview.categoricalFeatures} />
+              <StatCell label="Target" value={vm.overview.detectedTarget ?? "—"} />
+              <StatCell label="Problem Type" value={vm.overview.problemType ? cap(vm.overview.problemType) : undefined} />
+              <StatCell label="Status" value={vm.overview.processingStatus} />
+              <StatCell label="Processing Time" value={vm.overview.processingTimeSeconds !== undefined ? formatDuration(vm.overview.processingTimeSeconds) : undefined} />
+            </div>
           </div>
-          <div className="mt-6 grid grid-cols-2 gap-6 sm:grid-cols-4 lg:grid-cols-6">
-            <StatCell label="Rows" value={formatNumber(vm.overview.rows)} />
-            <StatCell label="Columns" value={vm.overview.columns} />
-            <StatCell label="Memory" value={vm.overview.memoryUsage} />
-            <StatCell label="Numeric" value={vm.overview.numericFeatures} />
-            <StatCell label="Categorical" value={vm.overview.categoricalFeatures} />
-            <StatCell label="Target" value={vm.overview.detectedTarget ?? "—"} />
-            <StatCell label="Problem Type" value={vm.overview.problemType ? cap(vm.overview.problemType) : undefined} />
-            <StatCell label="Status" value={vm.overview.processingStatus} />
-            <StatCell label="Processing Time" value={vm.overview.processingTimeSeconds !== undefined ? formatDuration(vm.overview.processingTimeSeconds) : undefined} />
-          </div>
-        </div>
+        </Reveal>
       )}
 
       {/* Executive summary — 4-panel */}
       {vm.executiveSummary && (
         <>
-          <SectionHeading>Executive Summary</SectionHeading>
+          <Reveal><SectionHeading>Executive Summary</SectionHeading></Reveal>
           <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="card !p-5">
-              <div className="label-mono text-[10px]">Overview</div>
-              <p className="mt-2 text-sm leading-relaxed text-ink">{vm.executiveSummary.overview || "—"}</p>
-            </div>
-            <div className="card !p-5">
-              <div className="label-mono text-[10px]">Key Findings</div>
-              {vm.executiveSummary.keyFindings.length ? (
-                <ul className="mt-2 space-y-1.5 text-sm text-ink">
-                  {vm.executiveSummary.keyFindings.map((f, i) => <li key={i}>• {f}</li>)}
-                </ul>
-              ) : <p className="mt-2 text-sm text-muted">None flagged.</p>}
-            </div>
-            <div className="card !p-5">
-              <div className="label-mono text-[10px]">Risks</div>
-              {vm.executiveSummary.risks.length ? (
-                <ul className="mt-2 space-y-1.5 text-sm text-ink">
-                  {vm.executiveSummary.risks.map((r, i) => <li key={i}>• {r}</li>)}
-                </ul>
-              ) : <p className="mt-2 text-sm text-muted">None flagged.</p>}
-            </div>
-            <div className="card !p-5">
-              <div className="label-mono text-[10px]">Recommendations</div>
-              {vm.executiveSummary.recommendations.length ? (
-                <ul className="mt-2 space-y-1.5 text-sm text-ink">
-                  {vm.executiveSummary.recommendations.map((r, i) => <li key={i}>• {r}</li>)}
-                </ul>
-              ) : <p className="mt-2 text-sm text-muted">None flagged.</p>}
-            </div>
+            {[
+              { label: "Overview", body: vm.executiveSummary.overview ? <p className="mt-2 text-sm leading-relaxed text-ink">{vm.executiveSummary.overview}</p> : <p className="mt-2 text-sm text-muted">—</p> },
+              { label: "Key Findings", body: vm.executiveSummary.keyFindings.length ? <ul className="mt-2 space-y-1.5 text-sm text-ink">{vm.executiveSummary.keyFindings.map((f, i) => <li key={i}>• {f}</li>)}</ul> : <p className="mt-2 text-sm text-muted">None flagged.</p> },
+              { label: "Risks", body: vm.executiveSummary.risks.length ? <ul className="mt-2 space-y-1.5 text-sm text-ink">{vm.executiveSummary.risks.map((r, i) => <li key={i}>• {r}</li>)}</ul> : <p className="mt-2 text-sm text-muted">None flagged.</p> },
+              { label: "Recommendations", body: vm.executiveSummary.recommendations.length ? <ul className="mt-2 space-y-1.5 text-sm text-ink">{vm.executiveSummary.recommendations.map((r, i) => <li key={i}>• {r}</li>)}</ul> : <p className="mt-2 text-sm text-muted">None flagged.</p> },
+            ].map((panel, i) => (
+              <Reveal key={panel.label} delay={i * 70}>
+                <div className="card h-full">
+                  <div className="label-mono text-[10px]">{panel.label}</div>
+                  {panel.body}
+                </div>
+              </Reveal>
+            ))}
           </div>
           {vm.executiveSummary.isFallback && (
-            <p className="mt-2 text-xs text-muted">Summary shown as a single block — structured sections will populate once the backend returns them.</p>
+            <p className="mt-3 text-xs text-muted">Summary shown as a single block — structured sections will populate once the backend returns them.</p>
           )}
         </>
       )}
@@ -1179,129 +1334,141 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       {/* Data quality dashboard */}
       {vm.quality && (
         <>
-          <SectionHeading>Data Quality Dashboard</SectionHeading>
-          <div className="card-elevated mt-5 flex flex-col gap-6 p-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-8">
-              <div className="flex items-center gap-4">
-                <div
-                  className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full text-xl font-bold text-white"
-                  style={{ background: statusColor(vm.quality.score) }}
-                  aria-label={`Data quality score ${vm.quality.score}`}
-                >
-                  {vm.quality.score}
-                </div>
-                <div>
-                  <div className="label-mono text-[10px]">Data Quality Score</div>
-                  <div className="font-display text-lg font-bold text-ink">{vm.quality.status}</div>
-                  <p className="text-xs text-muted">{vm.quality.sublabel}</p>
-                </div>
-              </div>
-            </div>
-
-            {vm.quality.components.length > 0 && (
-              <div className="grid grid-cols-1 gap-4 border-t border-line pt-5 sm:grid-cols-2 lg:grid-cols-5">
-                {vm.quality.components.map((c) => (
-                  <div key={c.key}>
-                    <ProgressBar
-                      label={c.label}
-                      value={c.score}
-                      active={openComponent === c.key}
-                      onClick={() => setOpenComponent(openComponent === c.key ? null : c.key)}
-                    />
-                    {openComponent === c.key && (
-                      <p className="mt-2 text-[11px] leading-relaxed text-muted">{c.explanation}</p>
-                    )}
+          <Reveal><SectionHeading>Data Quality Dashboard</SectionHeading></Reveal>
+          <Reveal delay={60}>
+            <div className="card-elevated mt-5 flex flex-col gap-6 p-6">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-8">
+                <div className="flex items-center gap-4">
+                  <div
+                    className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full border-2 border-ink text-xl font-bold text-white"
+                    style={{ background: statusColor(vm.quality.score) }}
+                    aria-label={`Data quality score ${vm.quality.score}`}
+                  >
+                    {vm.quality.score}
                   </div>
-                ))}
+                  <div>
+                    <div className="label-mono text-[10px]">Data Quality Score</div>
+                    <div className="font-display text-lg font-bold text-ink">{vm.quality.status}</div>
+                    <p className="text-xs text-muted">{vm.quality.sublabel}</p>
+                  </div>
+                </div>
               </div>
-            )}
-          </div>
+
+              {vm.quality.components.length > 0 && (
+                <div className="grid grid-cols-1 gap-4 border-t border-line pt-5 sm:grid-cols-2 lg:grid-cols-5">
+                  {vm.quality.components.map((c) => (
+                    <div key={c.key}>
+                      <ProgressBar
+                        label={c.label}
+                        value={c.score}
+                        active={openComponent === c.key}
+                        onClick={() => setOpenComponent(openComponent === c.key ? null : c.key)}
+                      />
+                      {openComponent === c.key && (
+                        <p className="mt-2 text-[11px] leading-relaxed text-muted">{c.explanation}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Reveal>
         </>
       )}
 
       {/* Dataset health */}
       {vm.health && (
-        <div className="card-elevated mt-6 flex items-center gap-5 p-6">
-          <div
-            className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[14px] text-sm font-bold text-white"
-            style={{ background: statusColor(vm.health.score) }}
-          >
-            {vm.health.score}
+        <Reveal className="mt-6">
+          <div className="card-elevated flex items-center gap-5 p-6">
+            <div
+              className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[14px] border-2 border-ink text-sm font-bold text-white"
+              style={{ background: statusColor(vm.health.score) }}
+            >
+              {vm.health.score}
+            </div>
+            <div>
+              <div className="label-mono text-[10px]">Dataset Health</div>
+              <div className="font-display text-lg font-bold text-ink">{vm.health.health}</div>
+              <p className="mt-1 text-xs text-muted">{vm.health.explanation}</p>
+            </div>
           </div>
-          <div>
-            <div className="label-mono text-[10px]">Dataset Health</div>
-            <div className="font-display text-lg font-bold text-ink">{vm.health.health}</div>
-            <p className="mt-1 text-xs text-muted">{vm.health.explanation}</p>
-          </div>
-        </div>
+        </Reveal>
       )}
 
       {/* Before / after cleaning */}
       {vm.beforeAfter && vm.beforeAfter.length > 0 && (
         <>
-          <SectionHeading>Before vs. After Cleaning</SectionHeading>
-          <p className="mt-2 text-xs text-muted">
-            Outlier counts are independent IQR detections on each dataset — a different
-            &ldquo;after&rdquo; count reflects re-measurement on the cleaned data, not damage from cleaning.
-          </p>
-          <div className="card-elevated mt-5 overflow-x-auto p-2">
-            <table className="w-full min-w-[480px] text-left text-xs">
-              <thead>
-                <tr className="text-muted">
-                  <th className="px-4 py-3 font-bold">Metric</th>
-                  <th className="px-4 py-3 font-bold">Before</th>
-                  <th className="px-4 py-3 font-bold">After</th>
-                  <th className="px-4 py-3 font-bold">Difference</th>
-                </tr>
-              </thead>
-              <tbody>
-                {vm.beforeAfter.map((r) => (
-                  <tr key={r.metric} className="border-t border-line">
-                    <td className="px-4 py-3 font-bold text-ink">{r.metric}</td>
-                    <td className="px-4 py-3 text-ink">{r.before}</td>
-                    <td className="px-4 py-3 text-ink">{r.after}</td>
-                    <td className="px-4 py-3" style={{ color: r.informational ? undefined : String(r.difference).startsWith("-") ? "#3f9d54" : r.difference === "0" ? undefined : "#c05a44" }}>{r.difference}</td>
+          <Reveal><SectionHeading>Before vs. After Cleaning</SectionHeading></Reveal>
+          <Reveal delay={40}>
+            <p className="mt-2 text-xs text-muted">
+              Outlier counts are independent IQR detections on each dataset — a different
+              &ldquo;after&rdquo; count reflects re-measurement on the cleaned data, not damage from cleaning.
+            </p>
+          </Reveal>
+          <Reveal delay={80}>
+            <div className="table-wrap mt-5">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Metric</th>
+                    <th>Before</th>
+                    <th>After</th>
+                    <th>Difference</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {vm.beforeAfter.map((r) => (
+                    <tr key={r.metric}>
+                      <td className="font-bold text-ink">{r.metric}</td>
+                      <td>{r.before}</td>
+                      <td>{r.after}</td>
+                      <td style={{ color: r.informational ? undefined : String(r.difference).startsWith("-") ? "var(--color-success)" : r.difference === "0" ? undefined : "var(--color-danger)" }}>{r.difference}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Reveal>
         </>
       )}
 
       {/* Cleaning timeline */}
       {vm.timeline && vm.timeline.length > 0 && (
         <>
-          <SectionHeading>Cleaning Timeline</SectionHeading>
-          <div className="card-elevated mt-5 p-6">
-            <ol className="relative space-y-5 border-l border-line pl-6">
-              {vm.timeline.map((t, i) => (
-                <li key={i} className="relative">
-                  <span
-                    className="absolute -left-[27px] flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white"
-                    style={{ background: "#3f9d54" }}
-                  >✓</span>
-                  <div className="text-sm font-bold text-ink">{t.action}</div>
-                  {t.reason && <p className="mt-1 text-xs text-muted">{t.reason}</p>}
-                  <span className="mt-1 inline-block label-mono text-[10px]" style={{ color: "#2f6fd6" }}>confidence: {t.confidence}</span>
-                </li>
-              ))}
-            </ol>
-          </div>
+          <Reveal><SectionHeading>Cleaning Timeline</SectionHeading></Reveal>
+          <Reveal delay={60}>
+            <div className="card-elevated mt-5 p-6">
+              <ol className="relative space-y-5 border-l-2 border-line pl-6">
+                {vm.timeline.map((t, i) => (
+                  <li key={i} className="relative">
+                    <span
+                      className="absolute -left-[31px] flex h-6 w-6 items-center justify-center rounded-full border-2 border-ink text-[10px] font-bold text-white"
+                      style={{ background: "var(--color-success)" }}
+                    >✓</span>
+                    <div className="text-sm font-bold text-ink">{t.action}</div>
+                    {t.reason && <p className="mt-1 text-xs text-muted">{t.reason}</p>}
+                    <span className="table-chip mt-2">confidence: {t.confidence}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </Reveal>
         </>
       )}
 
       {/* AI decisions */}
       {vm.aiDecisions && vm.aiDecisions.length > 0 && (
         <>
-          <SectionHeading>AI Decisions</SectionHeading>
+          <Reveal><SectionHeading>AI Decisions</SectionHeading></Reveal>
           <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {vm.aiDecisions.map((d, i) => (
-              <div key={i} className="card !p-5">
-                <div className="label-mono text-[10px]" style={{ color: "#2f6fd6" }}>{d.confidence} confidence</div>
-                <div className="mt-2 text-sm font-bold text-ink">{d.decision}</div>
-                <p className="mt-2 text-xs text-muted">{d.reason}</p>
-              </div>
+              <Reveal key={i} delay={i * 60}>
+                <div className="card h-full">
+                  <span className="table-chip" style={{ borderColor: "var(--color-info)", color: "var(--color-info)" }}>{d.confidence} confidence</span>
+                  <div className="mt-3 text-sm font-bold text-ink">{d.decision}</div>
+                  <p className="mt-2 text-xs text-muted">{d.reason}</p>
+                </div>
+              </Reveal>
             ))}
           </div>
         </>
@@ -1310,138 +1477,154 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       {/* Dataset insights */}
       {vm.insights && vm.insights.length > 0 && (
         <>
-          <SectionHeading>Dataset Insights</SectionHeading>
+          <Reveal><SectionHeading>Dataset Insights</SectionHeading></Reveal>
           <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {vm.insights.map((ins, i) => (
-              <div key={i} className="card !p-5">
-                <div className="label-mono text-[10px]">{ins.title}</div>
-                <div className="mt-2 font-display text-base font-bold text-ink">{ins.value}</div>
-                <p className="mt-1 text-xs text-muted">{ins.detail}</p>
-              </div>
+              <Reveal key={i} delay={i * 60}>
+                <div className="card h-full">
+                  <div className="label-mono text-[10px]">{ins.title}</div>
+                  <div className="mt-2 font-display text-base font-bold text-ink">{ins.value}</div>
+                  <p className="mt-1 text-xs text-muted">{ins.detail}</p>
+                </div>
+              </Reveal>
             ))}
           </div>
         </>
       )}
 
       {/* Best model heading */}
-      <h1 className="display-heading mt-12 text-4xl sm:text-5xl">
-        Best Model for <span className="italic underline decoration-mustard decoration-[6px] underline-offset-[8px]">Your Dataset</span>
-      </h1>
+      <Reveal>
+        <h1 className="display-heading mt-16 text-4xl sm:text-5xl">
+          Best Model for <span className="italic underline decoration-mustard decoration-[6px] underline-offset-[8px]">Your Dataset</span>
+        </h1>
+      </Reveal>
 
-      <div className="card-elevated mt-6 grid grid-cols-1 gap-8 p-8 md:grid-cols-2">
-        <div className="md:border-r md:border-line md:pr-8">
-          <div className="label-mono text-[10px]">{vm.best.recommendedLabel}</div>
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <span className="font-display text-2xl font-bold text-ink">{vm.best.name}</span>
-            <span className="inline-flex items-center rounded-pill bg-mustard px-3 py-1 text-[11px] font-bold text-ink">{vm.best.badge}</span>
-          </div>
-          <p className="mt-4 max-w-sm text-sm text-muted">{vm.best.description}</p>
-        </div>
-        <div className="flex items-center justify-between gap-6">
-          <div>
-            <div className="label-mono text-[10px]">{vm.best.scoreLabel}</div>
-            <div className="mt-2 flex items-center gap-2">
-              <span className="font-display text-4xl font-bold text-ink">{vm.best.scoreValue}</span>
-              {showConfidenceArrow && (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3f9d54" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <line x1="12" y1="19" x2="12" y2="6" /><polyline points="6 12 12 6 18 12" />
-                </svg>
-              )}
+      <Reveal delay={80}>
+        <div className="card-elevated mt-6 grid grid-cols-1 gap-8 p-8 md:grid-cols-2">
+          <div className="md:border-r md:border-line md:pr-8">
+            <div className="label-mono text-[10px]">{vm.best.recommendedLabel}</div>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <span className="font-display text-2xl font-bold text-ink">{vm.best.name}</span>
+              <span className="pill-label">{vm.best.badge}</span>
             </div>
-            <p className="mt-2 text-xs text-muted">{vm.best.scoreCaption}</p>
+            <p className="mt-4 max-w-sm text-sm text-muted">{vm.best.description}</p>
           </div>
-          <div className="relative" role="img" aria-label={`${vm.best.scoreLabel}: ${vm.best.scoreValue}`}>
-            <svg width="150" height="90" viewBox="0 0 150 90" aria-hidden="true">
-              <path d="M12 82 A63 63 0 0 1 138 82" fill="none" stroke="#efe9dd" strokeWidth="16" strokeLinecap="round" />
-              <path d={gaugePath(vm.best.gaugeFill)} fill="none" stroke="#f4c542" strokeWidth="16" strokeLinecap="round" />
-            </svg>
-            <div className="absolute inset-x-0 bottom-1 text-center font-display text-lg font-bold text-ink">{vm.best.scoreValue}</div>
-            <div className="mt-1 flex justify-between text-[9px] text-muted"><span>{vm.best.scaleLeft}</span><span>{vm.best.scaleRight}</span></div>
+          <div className="flex items-center justify-between gap-6">
+            <div>
+              <div className="label-mono text-[10px]">{vm.best.scoreLabel}</div>
+              <div className="mt-2 flex items-center gap-2">
+                <span className="font-display text-4xl font-bold text-ink">{vm.best.scoreValue}</span>
+                {showConfidenceArrow && (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <line x1="12" y1="19" x2="12" y2="6" /><polyline points="6 12 12 6 18 12" />
+                  </svg>
+                )}
+              </div>
+              <p className="mt-2 text-xs text-muted">{vm.best.scoreCaption}</p>
+            </div>
+            <div className="relative" role="img" aria-label={`${vm.best.scoreLabel}: ${vm.best.scoreValue}`}>
+              <svg width="150" height="90" viewBox="0 0 150 90" aria-hidden="true">
+                <path d="M12 82 A63 63 0 0 1 138 82" fill="none" stroke="var(--color-cream-sunken)" strokeWidth="16" strokeLinecap="round" />
+                <path d={gaugePath(vm.best.gaugeFill)} fill="none" stroke="var(--color-mustard)" strokeWidth="16" strokeLinecap="round" />
+              </svg>
+              <div className="absolute inset-x-0 bottom-1 text-center font-display text-lg font-bold text-ink">{vm.best.scoreValue}</div>
+              <div className="mt-1 flex justify-between text-[9px] text-muted"><span>{vm.best.scaleLeft}</span><span>{vm.best.scaleRight}</span></div>
+            </div>
           </div>
         </div>
-      </div>
+      </Reveal>
 
       {/* Model comparison — enriched cards */}
-      <SectionHeading>Model Comparison</SectionHeading>
+      <Reveal><SectionHeading>Model Comparison</SectionHeading></Reveal>
       <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {vm.models.map((m) => (
-          <div key={m.name} className={`card !p-5 ${m.isBest ? "!border-mustard" : ""}`} style={m.isBest ? { borderWidth: "2px" } : undefined}>
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-bold text-ink">{m.name}</div>
-              {m.isBest && <span className="inline-flex items-center rounded-pill bg-mustard px-2.5 py-1 text-[10px] font-bold text-ink">Best Fit</span>}
+        {vm.models.map((m, i) => (
+          <Reveal key={m.name} delay={i * 60}>
+            <div
+              className="card h-full"
+              style={m.isBest ? { borderWidth: "2px", borderColor: "var(--color-ink)", boxShadow: "var(--shadow-hard-sm)" } : undefined}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-bold text-ink">{m.name}</div>
+                {m.isBest && <span className="pill-label !py-1 !px-2.5 !text-[9px]">Best Fit</span>}
+              </div>
+              <div className="label-mono mt-1.5 text-[10px]">{m.confidence} confidence</div>
+              <p className="mt-2 text-xs leading-relaxed text-muted">{m.reason}</p>
+              {m.specs && Object.keys(m.specs).length > 0 && (
+                <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-line pt-3 text-[10.5px]">
+                  {Object.entries(m.specs).map(([k, v]) => (
+                    <div key={k} className="flex justify-between text-muted"><span>{k}</span><span className="text-ink">{v}</span></div>
+                  ))}
+                </div>
+              )}
+              {(m.advantages.length > 0 || m.disadvantages.length > 0) && (
+                <div className="mt-3 grid grid-cols-2 gap-3 border-t border-line pt-3 text-[10.5px]">
+                  <div>
+                    <div className="mb-1 label-mono text-[9px]">Pros</div>
+                    <ul className="space-y-0.5" style={{ color: "var(--color-success)" }}>{m.advantages.map((a, ai) => <li key={ai}>• {a}</li>)}</ul>
+                  </div>
+                  <div>
+                    <div className="mb-1 label-mono text-[9px]">Cons</div>
+                    <ul className="space-y-0.5" style={{ color: "var(--color-danger)" }}>{m.disadvantages.map((a, ai) => <li key={ai}>• {a}</li>)}</ul>
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="label-mono mt-1 text-[10px]">{m.confidence} confidence</div>
-            <p className="mt-2 text-xs leading-relaxed text-muted">{m.reason}</p>
-            {m.specs && Object.keys(m.specs).length > 0 && (
-              <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-line pt-3 text-[10.5px]">
-                {Object.entries(m.specs).map(([k, v]) => (
-                  <div key={k} className="flex justify-between text-muted"><span>{k}</span><span className="text-ink">{v}</span></div>
-                ))}
-              </div>
-            )}
-            {(m.advantages.length > 0 || m.disadvantages.length > 0) && (
-              <div className="mt-3 grid grid-cols-2 gap-3 border-t border-line pt-3 text-[10.5px]">
-                <div>
-                  <div className="mb-1 label-mono text-[9px]">Pros</div>
-                  <ul className="space-y-0.5" style={{ color: "#3f9d54" }}>{m.advantages.map((a, i) => <li key={i}>• {a}</li>)}</ul>
-                </div>
-                <div>
-                  <div className="mb-1 label-mono text-[9px]">Cons</div>
-                  <ul className="space-y-0.5" style={{ color: "#c05a44" }}>{m.disadvantages.map((a, i) => <li key={i}>• {a}</li>)}</ul>
-                </div>
-              </div>
-            )}
-          </div>
+          </Reveal>
         ))}
       </div>
 
       {/* Why not other models */}
       {vm.whyNotOthers && vm.whyNotOthers.length > 0 && (
         <>
-          <SectionHeading>Why Not Other Models</SectionHeading>
-          <div className="card-elevated mt-5 divide-y divide-line p-2">
-            {vm.whyNotOthers.map((w, i) => (
-              <div key={i} className="px-4 py-3 text-xs leading-relaxed text-ink">
-                <span className="font-bold">{w.model}</span> — {w.explanation.replace(`${w.model} `, "")}
-              </div>
-            ))}
-          </div>
+          <Reveal><SectionHeading>Why Not Other Models</SectionHeading></Reveal>
+          <Reveal delay={60}>
+            <div className="card-elevated mt-5 divide-y divide-line !p-2">
+              {vm.whyNotOthers.map((w, i) => (
+                <div key={i} className="px-4 py-3 text-xs leading-relaxed text-ink">
+                  <span className="font-bold">{w.model}</span> — {w.explanation.replace(`${w.model} `, "")}
+                </div>
+              ))}
+            </div>
+          </Reveal>
         </>
       )}
 
       {/* Model readiness */}
       {vm.readinessRows && vm.readinessRows.length > 0 && (
         <>
-          <SectionHeading>Model Readiness</SectionHeading>
-          <div className="card-elevated mt-5 divide-y divide-line p-2">
-            {vm.readinessRows.map((r) => (
-              <div key={r.label} className="flex items-center justify-between px-4 py-3 text-sm text-ink">
-                <span>{r.label}</span>
-                <span className="tracking-widest" style={{ color: "#f4c542" }}>{r.display}</span>
-              </div>
-            ))}
-          </div>
+          <Reveal><SectionHeading>Model Readiness</SectionHeading></Reveal>
+          <Reveal delay={60}>
+            <div className="card-elevated mt-5 divide-y divide-line !p-2">
+              {vm.readinessRows.map((r) => (
+                <div key={r.label} className="flex items-center justify-between px-4 py-3 text-sm text-ink">
+                  <span>{r.label}</span>
+                  <span className="tracking-widest text-mustard">{r.display}</span>
+                </div>
+              ))}
+            </div>
+          </Reveal>
         </>
       )}
 
       {/* Visual insights */}
       {vm.charts.length > 0 && (
         <>
-          <SectionHeading>Visual Insights</SectionHeading>
+          <Reveal><SectionHeading>Visual Insights</SectionHeading></Reveal>
           <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
-            {vm.charts.map((chart) => (
-              <button
-                key={chart.key}
-                type="button"
-                className="card !p-5 text-left"
-                onClick={() => (chart.url || chart.description || chart.interpretation) && setChartModal(chart)}
-              >
-                <div className="mb-4 text-center text-xs font-bold text-ink">{chart.title}</div>
-                <div className="flex items-center justify-center">
-                  {chart.url ? <ChartImage title={chart.title} url={chart.url} /> : chart.node}
-                </div>
-                {chart.description && <p className="mt-3 text-[11px] text-muted">{chart.description}</p>}
-              </button>
+            {vm.charts.map((chart, i) => (
+              <Reveal key={chart.key} delay={i * 70}>
+                <button
+                  type="button"
+                  className="card h-full w-full text-left"
+                  onClick={() => (chart.url || chart.description || chart.interpretation) && setChartModal(chart)}
+                >
+                  <div className="mb-4 text-center text-xs font-bold text-ink">{chart.title}</div>
+                  <div className="flex items-center justify-center">
+                    {chart.url ? <ChartImage title={chart.title} url={chart.url} /> : chart.node}
+                  </div>
+                  {chart.description && <p className="mt-3 text-[11px] text-muted">{chart.description}</p>}
+                </button>
+              </Reveal>
             ))}
           </div>
         </>
@@ -1461,92 +1644,100 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       {/* Statistical summary */}
       {vm.stats && vm.stats.length > 0 && (
         <>
-          <SectionHeading>Statistical Summary</SectionHeading>
-          <div className="card-elevated mt-5 overflow-x-auto p-2">
-            <table className="w-full min-w-[560px] text-left text-xs">
-              <thead>
-                <tr className="text-muted">
-                  <th className="px-4 py-3 font-bold">Column</th>
-                  <th className="px-4 py-3 font-bold">Mean</th>
-                  <th className="px-4 py-3 font-bold">Median</th>
-                  <th className="px-4 py-3 font-bold">Std Dev</th>
-                  <th className="px-4 py-3 font-bold">Min</th>
-                  <th className="px-4 py-3 font-bold">Max</th>
-                </tr>
-              </thead>
-              <tbody>
-                {vm.stats.map((s) => (
-                  <tr key={s.column} className="border-t border-line">
-                    <td className="px-4 py-3 font-bold text-ink">{s.column}</td>
-                    <td className="px-4 py-3 text-ink">{fmt(s.mean)}</td>
-                    <td className="px-4 py-3 text-ink">{fmt(s.median)}</td>
-                    <td className="px-4 py-3 text-ink">{fmt(s.std)}</td>
-                    <td className="px-4 py-3 text-ink">{fmt(s.min)}</td>
-                    <td className="px-4 py-3 text-ink">{fmt(s.max)}</td>
+          <Reveal><SectionHeading>Statistical Summary</SectionHeading></Reveal>
+          <Reveal delay={60}>
+            <div className="table-wrap mt-5">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Column</th>
+                    <th>Mean</th>
+                    <th>Median</th>
+                    <th>Std Dev</th>
+                    <th>Min</th>
+                    <th>Max</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {vm.stats.map((s) => (
+                    <tr key={s.column}>
+                      <td className="font-bold text-ink">{s.column}</td>
+                      <td>{fmt(s.mean)}</td>
+                      <td>{fmt(s.median)}</td>
+                      <td>{fmt(s.std)}</td>
+                      <td>{fmt(s.min)}</td>
+                      <td>{fmt(s.max)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Reveal>
         </>
       )}
 
       {/* Correlation highlights */}
       {vm.correlations && vm.correlations.length > 0 && (
         <>
-          <SectionHeading>Correlation Highlights</SectionHeading>
+          <Reveal><SectionHeading>Correlation Highlights</SectionHeading></Reveal>
           <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {vm.correlations.map((c) => (
-              <div key={`${c.a}-${c.b}`} className="card !p-4 flex items-center justify-between">
-                <span className="text-sm text-ink">{c.a} ↔ {c.b}</span>
-                <span className="font-display text-lg font-bold text-ink">{c.value.toFixed(2)}</span>
-              </div>
+            {vm.correlations.map((c, i) => (
+              <Reveal key={`${c.a}-${c.b}`} delay={i * 50}>
+                <div className="card flex items-center justify-between !p-4">
+                  <span className="text-sm text-ink">{c.a} ↔ {c.b}</span>
+                  <span className="font-display text-lg font-bold text-ink">{c.value.toFixed(2)}</span>
+                </div>
+              </Reveal>
             ))}
           </div>
-          <p className="mt-2 text-xs text-muted">High correlation between features may indicate multicollinearity.</p>
+          <p className="mt-3 text-xs text-muted">High correlation between features may indicate multicollinearity.</p>
         </>
       )}
 
       {/* Processing metrics */}
       {vm.processingMetrics && vm.processingMetrics.length > 0 && (
         <>
-          <SectionHeading>Processing Metrics</SectionHeading>
-          <div className="card-elevated mt-5 space-y-3 p-6">
-            {(() => {
-              const max = Math.max(...vm.processingMetrics!.map((m) => m.seconds), 0.01);
-              return vm.processingMetrics!.map((m) => (
-                <div key={m.label} className="grid grid-cols-[120px_1fr_50px] items-center gap-3 text-xs">
-                  <span className="text-muted">{m.label}</span>
-                  <span className="h-2 w-full overflow-hidden rounded-pill bg-cream-sunken">
-                    <span className="block h-full rounded-pill" style={{ width: `${(m.seconds / max) * 100}%`, background: "#2f6fd6" }} />
-                  </span>
-                  <span className="text-right font-bold text-ink">{m.seconds}s</span>
-                </div>
-              ));
-            })()}
-          </div>
+          <Reveal><SectionHeading>Processing Metrics</SectionHeading></Reveal>
+          <Reveal delay={60}>
+            <div className="card-elevated mt-5 space-y-3 p-6">
+              {(() => {
+                const max = Math.max(...vm.processingMetrics!.map((m) => m.seconds), 0.01);
+                return vm.processingMetrics!.map((m) => (
+                  <div key={m.label} className="grid grid-cols-[120px_1fr_50px] items-center gap-3 text-xs">
+                    <span className="text-muted">{m.label}</span>
+                    <span className="h-2 w-full overflow-hidden rounded-pill border border-ink/10 bg-cream-sunken">
+                      <span className="bar-grow block h-full origin-left rounded-pill" style={{ width: `${(m.seconds / max) * 100}%`, background: "var(--color-info)" }} />
+                    </span>
+                    <span className="text-right font-bold text-ink">{m.seconds}s</span>
+                  </div>
+                ));
+              })()}
+            </div>
+          </Reveal>
         </>
       )}
 
       {/* Data quality issues */}
       {vm.quality && vm.quality.issues.length > 0 && (
         <>
-          <SectionHeading>Data Quality Issues</SectionHeading>
+          <Reveal><SectionHeading>Data Quality Issues</SectionHeading></Reveal>
           <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
             {vm.quality.issues.map((iss, i) => (
-              <div key={i} className="card !p-5" style={{ borderLeft: `3px solid ${severityColor(iss.severity)}` }}>
-                <div className="flex items-start justify-between gap-3">
-                  <span className="text-sm font-bold text-ink">{iss.issue}</span>
-                  <span
-                    className="shrink-0 rounded-pill px-2.5 py-0.5 text-[10px] font-bold"
-                    style={{ background: `${severityColor(iss.severity)}22`, color: severityColor(iss.severity) }}
-                  >
-                    {iss.severity}
-                  </span>
+              <Reveal key={i} delay={i * 60}>
+                <div className="card h-full">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-sm font-bold text-ink">{iss.issue}</span>
+                    <span
+                      className="table-chip shrink-0"
+                      style={{ borderColor: severityColor(iss.severity), color: severityColor(iss.severity), backgroundColor: severityBg(iss.severity) }}
+                    >
+                      {iss.severity}
+                    </span>
+                  </div>
+                  {iss.impact && <p className="mt-3 text-[11px] text-muted"><span className="font-bold text-ink">Impact: </span>{iss.impact}</p>}
+                  {iss.recommendation && <p className="mt-1 text-[11px] text-muted"><span className="font-bold text-ink">Recommendation: </span>{iss.recommendation}</p>}
                 </div>
-                {iss.impact && <p className="mt-2 text-[11px] text-muted"><span className="font-bold text-ink">Impact: </span>{iss.impact}</p>}
-                {iss.recommendation && <p className="mt-1 text-[11px] text-muted"><span className="font-bold text-ink">Recommendation: </span>{iss.recommendation}</p>}
-              </div>
+              </Reveal>
             ))}
           </div>
         </>
@@ -1555,27 +1746,36 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       {/* Warnings */}
       {vm.warnings && vm.warnings.length > 0 && (
         <>
-          <SectionHeading>Warnings</SectionHeading>
-          <ul className="mt-4 flex flex-col gap-2">
+          <Reveal><SectionHeading>Warnings</SectionHeading></Reveal>
+          <ul className="mt-4 flex flex-col gap-2.5">
             {vm.warnings.map((w, i) => (
-              <li key={i} className="flex items-start gap-3 rounded-[12px] border px-4 py-3 text-sm text-ink" style={{ borderColor: "#f0dfa8", backgroundColor: "#fdf6e3" }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#b8860b" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 shrink-0" aria-hidden="true">
-                  <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-                  <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
-                </svg>
-                {w}
-              </li>
+              <Reveal key={i} delay={i * 50}>
+                <li
+                  className="flex items-center gap-3 rounded-[14px] border-2 border-ink px-4 py-3 text-sm text-ink"
+                  style={{ backgroundColor: "var(--color-warning-bg)" }}
+                >
+                  <span className="icon-badge !h-8 !w-8 shrink-0" style={{ backgroundColor: "var(--color-warning)", color: "#fff" }} aria-hidden="true">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+                      <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+                    </svg>
+                  </span>
+                  {w}
+                </li>
+              </Reveal>
             ))}
           </ul>
         </>
       )}
 
-      <p className="mt-8 text-center text-xs text-muted">
-        AI-generated recommendations — not professional advice; verify before use.
-      </p>
+      <Reveal>
+        <p className="mt-10 text-center text-xs text-muted">
+          AI-generated recommendations — not professional advice; verify before use.
+        </p>
+      </Reveal>
 
       {/* Download center — 5 items */}
-      <SectionHeading>Download Center</SectionHeading>
+      <Reveal><SectionHeading>Download Center</SectionHeading></Reveal>
       <div className="mb-16 mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {[
           { key: "cleanedCsv", label: "Cleaned CSV", sub: "Your cleaned dataset", href: vm.downloads?.cleanedCsv },
@@ -1583,23 +1783,25 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
           { key: "jsonResults", label: "JSON Results", sub: "Machine-readable", href: vm.downloads?.jsonResults },
           { key: "chartsZip", label: "Charts (ZIP)", sub: "All generated charts", href: vm.downloads?.chartsZip },
           { key: "cleaningLog", label: "Cleaning Log", sub: "Timeline + decisions", href: vm.downloads?.cleaningLog },
-        ].map((d) => (
-          <div key={d.key} className="card !p-5 flex flex-col gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-cream-sunken text-ink" aria-hidden="true">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 4v11" /><polyline points="8 11 12 15 16 11" /><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" />
-              </svg>
-            </span>
-            <div>
-              <div className="text-xs font-bold text-ink">{d.label}</div>
-              <p className="text-[10.5px] text-muted">{d.sub}</p>
+        ].map((d, i) => (
+          <Reveal key={d.key} delay={i * 50}>
+            <div className="card flex h-full flex-col gap-3">
+              <span className="icon-badge !h-9 !w-9" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 4v11" /><polyline points="8 11 12 15 16 11" /><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" />
+                </svg>
+              </span>
+              <div>
+                <div className="text-xs font-bold text-ink">{d.label}</div>
+                <p className="text-[10.5px] text-muted">{d.sub}</p>
+              </div>
+              {d.href ? (
+                <a href={d.href} download className="btn btn-yellow !py-2 !text-[11px] justify-center">Download</a>
+              ) : (
+                <button type="button" className="btn !py-2 !text-[11px] justify-center opacity-50 cursor-not-allowed" disabled aria-disabled="true">Unavailable</button>
+              )}
             </div>
-            {d.href ? (
-              <a href={d.href} download className="btn btn-yellow !py-2 !text-[11px] justify-center">Download</a>
-            ) : (
-              <button type="button" className="btn !py-2 !text-[11px] justify-center opacity-50 cursor-not-allowed" disabled aria-disabled="true">Unavailable</button>
-            )}
-          </div>
+          </Reveal>
         ))}
       </div>
     </>
@@ -1628,24 +1830,6 @@ function mapLoadError(err: unknown): string {
   }
   if (err instanceof Error) return err.message;
   return "An unexpected error occurred.";
-}
-
-const PIPELINE_STAGES = ["Uploading", "Profiling", "Analyzing", "Cleaning", "Generating Charts", "Recommending Models", "Complete"];
-
-function LoadingExperience() {
-  return (
-    <div className="mt-6 rounded-[16px] border border-line bg-cream-card px-6 py-10" role="status" aria-live="polite" aria-busy="true">
-      <p className="label-mono text-center">Analyzing your dataset…</p>
-      <ol className="mx-auto mt-6 max-w-xs space-y-3">
-        {PIPELINE_STAGES.map((stage, i) => (
-          <li key={stage} className="flex items-center gap-3 text-xs text-muted">
-            <span className="flex h-5 w-5 items-center justify-center rounded-full border border-line text-[10px]">{i + 1}</span>
-            {stage}
-          </li>
-        ))}
-      </ol>
-    </div>
-  );
 }
 
 function ResultsContent() {
@@ -1686,7 +1870,9 @@ function ResultsContent() {
   }, [fileId, retryToken]);
 
   return (
-    <div className="min-h-screen bg-cream">
+    <div className="relative min-h-screen bg-cream">
+      <div aria-hidden="true" className="pointer-events-none fixed inset-0 -z-10 bg-grid-pattern-page" />
+
       <div className="mx-auto w-full max-w-6xl px-6">
         <SiteNav />
 
@@ -1695,14 +1881,21 @@ function ResultsContent() {
         </div>
 
         {error ? (
-          <div className="mt-6 rounded-[16px] border border-line bg-cream-card px-6 py-10 text-center" role="alert">
-            <p className="text-sm font-bold text-ink">Couldn&apos;t load results</p>
-            <p className="mt-2 text-sm text-muted">{error}</p>
-            <div className="mt-6 flex justify-center gap-4">
-              <button type="button" onClick={retry} className="btn btn-yellow">Retry</button>
-              <Link href="/upload" className="btn">Upload a file</Link>
+          <Reveal className="mt-6">
+            <div className="card-elevated px-6 py-14 text-center" role="alert">
+              <span className="icon-badge mx-auto" style={{ backgroundColor: "var(--color-danger)", color: "#fff" }} aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <line x1="12" y1="8" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /><circle cx="12" cy="12" r="9" />
+                </svg>
+              </span>
+              <p className="mt-4 text-sm font-bold text-ink">Couldn&apos;t load results</p>
+              <p className="mt-2 text-sm text-muted">{error}</p>
+              <div className="mt-6 flex justify-center gap-4">
+                <button type="button" onClick={retry} className="btn btn-yellow">Retry</button>
+                <Link href="/upload" className="btn btn-ghost">Upload a file</Link>
+              </div>
             </div>
-          </div>
+          </Reveal>
         ) : vm ? (
           <ResultsView vm={vm} />
         ) : (

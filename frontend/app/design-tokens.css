@@ -23,6 +23,21 @@
   --color-mustard-hover: #e6b52f; /* yellow pill hover */
   --color-blue-accent: #a5c4e8; /* secondary badge only (e.g. "Accurate · Fast · Reliable") — not used elsewhere */
 
+  /* ---- Semantic status tokens (used by Results page scoring, badges, warnings) ---- */
+  /* All hues are muted / warm-shifted to stay within the cream/ink/mustard family. */
+  --color-success: #6b8f5a;       /* muted sage green */
+  --color-success-bg: #eef2e8;
+  --color-success-border: #c8dcc0;
+  --color-danger: #b5654a;        /* muted terracotta */
+  --color-danger-bg: #f7ede8;
+  --color-danger-border: #dfc0b4;
+  --color-warning: #c99a3a;       /* muted amber, mustard family */
+  --color-warning-bg: #faf3e0;
+  --color-warning-border: #e8d5a0;
+  --color-info: #5b7a9e;          /* muted blue-gray */
+  --color-info-bg: #eef2f6;
+  --color-info-border: #c0d0e0;
+
   /* ---- Typography ---- */
   --font-display: var(--font-display-src), Georgia, "Times New Roman", serif;
   --font-body: var(--font-body-src), system-ui, -apple-system, sans-serif;
@@ -57,6 +72,18 @@
      without obscuring the dark background. */
   --shadow-glow-yellow: 0 4px 14px rgba(244, 197, 66, 0.4);
   --shadow-glow-yellow-hover: 0 6px 20px rgba(244, 197, 66, 0.6), 0 2px 8px rgba(244, 197, 66, 0.3);
+
+
+  /* ---- Status tokens (Results page) — stay within the warm cream/ink/mustard
+     family instead of bright semantic red/green/blue ---- */
+  --color-success: #6b8f5a;
+  --color-success-bg: #eef2e8;
+  --color-danger: #b5654a;
+  --color-danger-bg: #f7ede8;
+  --color-warning: #c99a3a;
+  --color-warning-bg: #faf3e0;
+  --color-info: #5b7a9e;
+  --color-info-bg: #eef2f6;
 }
 
 @layer components {
