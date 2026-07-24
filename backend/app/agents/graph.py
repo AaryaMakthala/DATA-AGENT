@@ -354,6 +354,21 @@ def visualization_node(state: AnalystState) -> dict:
     except VisualizerError as exc:
         logger.error("Graph: visualization node failed: %s", exc)
         raise
+
+    # The viz snapshot (pre-encoding CSV) is only needed as the chart-generation
+    # source above. Once generate_charts returns, delete it to avoid accumulating
+    # a duplicate of the cleaned CSV on disk -- the periodic cleanup sweep would
+    # catch it eventually, but removing it immediately keeps disk usage minimal.
+    viz_file = state.get("viz_file")
+    if viz_file and viz_file != state.get("cleaned_file"):
+        viz_path = Path(viz_file)
+        try:
+            viz_path.unlink(missing_ok=True)
+            logger.info("Graph: deleted viz snapshot after chart generation: %s", viz_path.name)
+        except OSError as exc:
+            # Non-fatal: the periodic cleanup sweep will remove it later.
+            logger.warning("Graph: could not delete viz snapshot %s: %s", viz_path.name, exc)
+
     return {"charts": charts, "processing_metrics": metrics}
 
 

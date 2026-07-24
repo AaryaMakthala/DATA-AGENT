@@ -22,6 +22,7 @@ from app.services.file_service import (
     UploadTooLargeError,
     chart_path_to_url,
     resolve_cleaned_file_path,
+    resolve_original_filename,
     resolve_report_path,
     resolve_upload_path,
     save_upload,
@@ -139,8 +140,23 @@ def _response_payload(file_id: str, data: dict) -> dict:
     on top of this (see `get_results` below) rather than changing this
     function's shape, so /analyze's response contract doesn't shift.
     """
+    # Resolve the human-readable filename from the sidecar so both /analyze
+    # and /results always return it. Falls back gracefully: if the sidecar
+    # doesn't exist (older run), original_filename stays None and the frontend
+    # falls back to file_id.
+    stored_original = data.get("original_filename")  # set by profiler_node into the report
+    original_filename_display: str | None = None
+    if stored_original:
+        original_filename_display = f"{stored_original}.csv"
+    else:
+        # Fallback: try the sidecar directly (covers reports written before
+        # original_filename was seeded into the graph state).
+        sidecar_name = resolve_original_filename(file_id)
+        if sidecar_name != file_id:  # sidecar exists and has a real name
+            original_filename_display = f"{sidecar_name}.csv"
     return dict(
         file_id=file_id,
+        original_filename=original_filename_display,
         profile=data.get("profile"),
         cleaned_profile=data.get("cleaned_profile"),
         data_validity=data.get("data_validity"),
@@ -227,6 +243,10 @@ async def analyze_csv(
             {
                 "file_path": str(path),
                 "file_id": file_id,
+                # Seed the human-readable original filename so profiler_node
+                # uses it for artifact names instead of falling back to the
+                # UUID stem (the uploaded file is always saved as {file_id}.csv).
+                "original_filename": resolve_original_filename(file_id),
             }
         )
 

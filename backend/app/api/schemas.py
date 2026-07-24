@@ -28,6 +28,11 @@ class QualityScore(BaseModel):
 class AnalyzeResponse(BaseModel):
     file_id: str
     status: str
+    # Human-readable original upload filename (e.g. "large-dataset.csv"),
+    # resolved from the sidecar by file_service.resolve_original_filename.
+    # Present on every response written after this field was added; None for
+    # reports written before (handled gracefully -- callers fall back to file_id).
+    original_filename: str | None = None
 
     profile: dict[str, Any] | None = None
     # NEW: the post-cleaning profile (see agents/state.py's `cleaned_profile`
@@ -45,6 +50,9 @@ class AnalyzeResponse(BaseModel):
 
 class ResultsResponse(BaseModel):
     file_id: str
+    # Human-readable original upload filename (e.g. "large-dataset.csv"),
+    # resolved from the sidecar by file_service.resolve_original_filename.
+    original_filename: str | None = None
 
     profile: dict[str, Any] | None = None
     cleaned_profile: dict[str, Any] | None = None

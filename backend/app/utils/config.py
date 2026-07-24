@@ -70,8 +70,10 @@ class Config:
     # are kept before a startup sweep deletes them. Without this the folders
     # grow without bound -- every analysis leaves an upload, a cleaned file, a
     # viz snapshot, several PNGs, and a report on disk forever. 0 disables the
-    # sweep. Default 24 hours; override with ARTIFACT_RETENTION_HOURS.
-    ARTIFACT_RETENTION_HOURS: float = float(os.getenv("ARTIFACT_RETENTION_HOURS", "24"))
+    # sweep. Default 0.25 hours (15 min) -- files are only needed for the
+    # duration of a single user session (upload → analyze → download), not
+    # indefinitely. Override with ARTIFACT_RETENTION_HOURS.
+    ARTIFACT_RETENTION_HOURS: float = float(os.getenv("ARTIFACT_RETENTION_HOURS", "0.25"))
 
     # Folder configuration (relative to backend/ unless an absolute path is given)
     UPLOAD_FOLDER: Path = BACKEND_DIR / os.getenv("UPLOAD_FOLDER", "uploads")

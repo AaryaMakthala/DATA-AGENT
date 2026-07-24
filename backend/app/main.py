@@ -19,8 +19,10 @@ logger = get_logger(__name__)
 
 # How often the background sweep thread runs (seconds). Independent of
 # ARTIFACT_RETENTION_HOURS -- that controls *age* of files to delete; this
-# controls *frequency* of checks. 1 hour is fine for a 24h retention window.
-_CLEANUP_INTERVAL_SECONDS = 3600
+# controls *frequency* of checks. Run every 5 minutes to stay within the
+# short 15-min TTL window (a 1-hour interval with a 15-min TTL would allow
+# files to linger up to ~75 minutes worst-case).
+_CLEANUP_INTERVAL_SECONDS = 300
 
 
 def _background_cleanup_loop() -> None:

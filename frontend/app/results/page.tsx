@@ -402,6 +402,10 @@ const resultsResponseSchema = z
   .object({
     // legacy top-level fields kept for backward compatibility during rollout
     file_id: z.string().min(1),
+    // Human-readable original upload filename (e.g. "large-dataset.csv"),
+    // populated by the backend from the sidecar saved during upload.
+    // Nullish for older reports written before this field was added.
+    original_filename: z.string().nullish(),
     profile: z
       .object({
         shape: z.object({ rows: z.number(), columns: z.number() }),
@@ -760,7 +764,15 @@ function buildRealVM(data: ValidatedResults): ResultsVM {
   const rec = data.ml_recommendation;
   const rows = data.overview?.rows ?? data.profile?.shape.rows ?? data.metadata?.row_count ?? 0;
   const cols = data.overview?.columns ?? data.profile?.shape.columns ?? data.metadata?.column_count ?? 0;
-  const filename = data.overview?.dataset_name ?? `${data.file_id}.csv`;
+  // Prefer the original_filename the backend resolved from the upload sidecar
+  // (e.g. "large-dataset.csv"), then fall back to the overview's dataset_name
+  // (which may itself be derived from original_filename on the backend), then
+  // lastly to a file_id-based name. This ensures the "Upload Successful" banner
+  // and Dataset Overview card never show a raw UUID hash to the user.
+  const filename =
+    data.original_filename ??
+    data.overview?.dataset_name ??
+    `${data.file_id}.csv`;
 
   // Failure gate: if the backend flagged this dataset as unusable, surface
   // the real validation error and render nothing else.
