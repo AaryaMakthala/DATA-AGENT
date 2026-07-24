@@ -1,16 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { motion } from "framer-motion";
-import { SiteNav, ArrowIcon } from "@/components/SiteNav";
+import { motion, type Variants } from "framer-motion";
+import { SiteNav, ArrowIcon, SiteFooter } from "@/components/SiteNav";
 
 // Reusable Animation Variants
-const fadeUp = {
+const fadeUp: Variants = {
   hidden: { opacity: 0, y: 30 },
   visible: { opacity: 1, y: 0, transition: { duration: 0.6, ease: "easeOut" } },
 };
 
-const staggerContainer = {
+const staggerContainer: Variants = {
   hidden: { opacity: 0 },
   visible: {
     opacity: 1,
@@ -162,7 +162,7 @@ export default function About() {
             <div>
               <h2 className="text-xl font-bold uppercase tracking-wider text-[#D4AF37] mb-6">Our Mission</h2>
               <blockquote className="text-3xl sm:text-4xl font-medium leading-tight text-[#111111]">
-                "Data analysis should not be limited to experts. We believe everyone should be able to understand, clean, and use their data with the power of artificial intelligence."
+                &ldquo;Data analysis should not be limited to experts. We believe everyone should be able to understand, clean, and use their data with the power of artificial intelligence.&rdquo;
               </blockquote>
             </div>
             
@@ -384,6 +384,7 @@ export default function About() {
         </motion.section>
 
       </div>
+      <SiteFooter />
     </div>
   );
 }

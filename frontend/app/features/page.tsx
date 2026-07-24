@@ -4,7 +4,7 @@ import React, { useRef } from "react";
 import Link from "next/link";
 import { motion, useScroll, useTransform } from "framer-motion";
 
-import { SiteNav, ArrowIcon, SparkleIcon } from "@/components/SiteNav";
+import { SiteNav, ArrowIcon, SparkleIcon, SiteFooter } from "@/components/SiteNav";
 
 // --- DATA STRUCTURES ---
 
@@ -93,7 +93,7 @@ const FEATURES = [
           whileInView={{ opacity: 1, x: 0 }}
           viewport={{ once: true }}
         >
-          What's driving the revenue drop in Q3?
+          What&apos;s driving the revenue drop in Q3?
         </motion.div>
         <motion.div 
           className="self-start bg-white border border-ink/5 text-ink text-sm py-3 px-4 rounded-2xl rounded-tl-sm shadow-sm max-w-[90%]"
@@ -463,6 +463,7 @@ export default function Features() {
         </div>
       </section>
 
+      <SiteFooter />
     </div>
   );
 }

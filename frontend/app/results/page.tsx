@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { z } from "zod";
 
-import { SiteNav } from "@/components/SiteNav";
+import { SiteNav, SiteFooter } from "@/components/SiteNav";
 import { ApiError, getResults, resolveAssetUrl } from "@/lib/api";
 
 /**
@@ -1709,6 +1709,7 @@ function ResultsContent() {
           <LoadingExperience />
         )}
       </div>
+      <SiteFooter />
     </div>
   );
 }

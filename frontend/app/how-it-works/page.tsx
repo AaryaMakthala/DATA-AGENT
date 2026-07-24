@@ -5,7 +5,7 @@ import Link from "next/link";
 import { motion, useScroll, useTransform } from "framer-motion";
 
 // Assuming these exist in your project based on the original code
-import { SiteNav, ArrowIcon } from "@/components/SiteNav";
+import { SiteNav, ArrowIcon, SiteFooter } from "@/components/SiteNav";
 
 // --- DATA ARRAYS ---
 
@@ -404,6 +404,7 @@ export default function HowItWorks() {
         </section>
         
       </div>
+      <SiteFooter />
     </div>
   );
 }

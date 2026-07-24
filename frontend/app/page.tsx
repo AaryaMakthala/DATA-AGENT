@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import Image from "next/image";
 import Link from "next/link";
 
-import { SiteNav, ArrowIcon } from "@/components/SiteNav";
+import { SiteNav, ArrowIcon, SiteFooter } from "@/components/SiteNav";
 
 const STEPS = [
   { title: "Upload", body: "We support CSV and Excel files" },
@@ -484,6 +484,8 @@ export default function Home() {
           </div>
         </Reveal>
       </section>
+
+      <SiteFooter />
     </div>
   );
 }

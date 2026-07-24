@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 
-import { SiteNav } from "@/components/SiteNav";
+import { SiteNav, SiteFooter } from "@/components/SiteNav";
 import { analyzeCsv, ApiError, uploadCsv } from "@/lib/api";
 
 type Stage = "idle" | "uploading" | "analyzing" | "error";
@@ -300,6 +300,7 @@ export default function UploadPage() {
           </Link>
         </div>
       </div>
+      <SiteFooter />
     </div>
   );
 }
