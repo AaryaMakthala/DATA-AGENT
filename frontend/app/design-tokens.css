@@ -160,6 +160,25 @@
     background-color: var(--color-cream-sunken);
   }
 
+  /* Hero pill — the single primary action on a page (e.g. the Upload card's
+     "Choose CSV file"). Same shadow/press contract as .btn, just larger, with
+     a slight rotation on lift so the focal button feels hand-placed. */
+  .btn-lg {
+    padding: 1.05rem 2.4rem;
+    font-size: 0.8rem;
+    letter-spacing: 0.14em;
+  }
+
+  .btn-lg:hover {
+    transform: translate(-3px, -3px) rotate(-1.2deg);
+    box-shadow: var(--shadow-hard-hover);
+  }
+
+  .btn-lg:active {
+    transform: translate(1px, 1px) rotate(0deg);
+    box-shadow: var(--shadow-hard-press);
+  }
+
   /* Compact pill for use inside cards/headers (e.g. "See Full Report") */
   .btn-sm {
     padding: 0.4rem 0.9rem;
@@ -495,6 +514,103 @@
     text-transform: uppercase;
     color: var(--color-muted);
   }
+
+  /* ============================================================
+     Upload screen — the one-screen centerpiece layout
+     ============================================================
+     Requirement: the ENTIRE upload card is visible on the first screen at
+     1366×768 and up, with the card holding ~65–75% of viewport height.
+
+     The old layout couldn't do this because every gap was a fixed rem step
+     (pt-12 / mt-10 / mt-7 / py-14): at 768px tall they summed past the fold,
+     and at 1080px they left the card stranded near the top. So instead of
+     four breakpoints, every vertical measurement here is a vh-aware clamp() —
+     min for short laptops, vh for the fluid middle, max so 4K doesn't bloat.
+     Horizontal padding stays vw/rem-based; only the VERTICAL axis tracks vh. */
+
+  /* Owns exactly one screen: nav at top, hero+card optically centered below. */
+  .upload-screen {
+    display: flex;
+    flex-direction: column;
+    min-height: 100dvh;
+  }
+
+  .upload-screen-body {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: clamp(0.85rem, 2.4vh, 1.75rem);
+    padding-block: clamp(0.75rem, 2.4vh, 2rem);
+  }
+
+  /* The drop surface. Deliberately NOT a dashed rectangle — it uses the site's
+     real signature (2px ink border + hard offset shadow + cream fill), so it
+     reads as a crafted panel rather than a generic browser upload widget.
+     Children are laid out by this element's own `gap`, so no child carries a
+     margin — that's what keeps the whole stack compressible in one place. */
+  .upload-surface {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    text-align: center;
+    gap: clamp(0.5rem, 1.5vh, 1.05rem);
+    padding: clamp(1.1rem, 3vh, 2.15rem) clamp(1.25rem, 4vw, 2.75rem);
+    border: 2px solid var(--color-ink);
+    border-radius: var(--radius-card);
+    background-color: var(--color-cream);
+    box-shadow: var(--shadow-hard-sm);
+    cursor: pointer;
+    transition:
+      background-color 0.22s ease,
+      transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
+      box-shadow 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  .upload-surface:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: var(--shadow-hard);
+  }
+
+  /* Drag-over: mustard wash + a nudge of scale, so the feedback is unmistakable
+     without swapping to a different border language mid-interaction. */
+  .upload-surface.is-dragging {
+    background-color: var(--color-mustard-wash);
+    transform: translate(-3px, -3px) scale(1.012);
+    box-shadow: var(--shadow-hard-hover);
+  }
+
+  /* Keyboard parity: tabbing to the hidden input lights the surface the same
+     way hovering it does, so focus is never invisible. */
+  .upload-surface:has(input:focus-visible) {
+    background-color: var(--color-mustard-wash);
+    box-shadow: var(--shadow-hard-hover);
+  }
+
+  /* While uploading/analyzing the surface is inert — no lift, no pointer, and
+     no click-through (matching the previous `pointer-events-none` behavior so
+     a mid-upload click can't reopen the file picker). */
+  .upload-surface.is-busy,
+  .upload-surface.is-busy:hover {
+    cursor: default;
+    pointer-events: none;
+    transform: none;
+    box-shadow: var(--shadow-hard-sm);
+  }
+
+  /* Focal badge — scales with viewport height alongside everything else. */
+  .upload-badge {
+    width: clamp(56px, 9vh, 86px);
+    height: clamp(56px, 9vh, 86px);
+  }
+
+  .upload-surface:hover .upload-badge {
+    transform: translate(-2px, -2px) rotate(-6deg);
+    box-shadow: var(--shadow-hard);
+  }
 }
 
 /* ============================================================
@@ -612,6 +728,85 @@
   animation: drawLine 1.4s ease-out forwards;
 }
 
+/* Upload progress: diagonal ink stripes crawling across the mustard fill. Uses
+   a repeating-linear-gradient as TEXTURE (not a color gradient) — the bar stays
+   flat mustard, so the site's no-gradient rule is intact. */
+@keyframes stripeSlide {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 28px 0;
+  }
+}
+
+.progress-stripes {
+  background-color: var(--color-mustard);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(20, 20, 20, 0.16) 0 6px,
+    transparent 6px 14px
+  );
+  background-size: 28px 28px;
+  animation: stripeSlide 0.7s linear infinite;
+}
+
+/* Success checkmark swap: the badge pops in with a slight overshoot. */
+@keyframes badgePop {
+  0% {
+    opacity: 0;
+    transform: scale(0.6) rotate(-14deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.08) rotate(3deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+.animate-badge-pop {
+  animation: badgePop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* Ambient halo behind the upload badge — breathes slowly so the focal point
+   feels alive. Scale-only on a separate element, leaving the badge's own
+   transform free for the hover lift. */
+@keyframes haloBreathe {
+  0%,
+  100% {
+    opacity: 0.34;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.16;
+    transform: scale(1.18);
+  }
+}
+
+.animate-halo {
+  animation: haloBreathe 3.4s ease-in-out infinite;
+}
+
+/* Cross-fade used when the upload copy swaps between states (idle → success),
+   so the text changes feel intentional rather than snapping. */
+@keyframes stateFade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-state-fade {
+  animation: stateFade 0.36s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 @keyframes marquee {
   from {
     transform: translateX(0);
@@ -652,4 +847,38 @@
   animation: gridDrift 26s linear infinite;
   mask-image: linear-gradient(to bottom, transparent 0%, black 6%, black 92%, transparent 100%);
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 6%, black 92%, transparent 100%);
+}
+
+/* Respect the OS "reduce motion" setting: ambient loops stop entirely, and
+   one-shot transitions collapse to near-instant. State still CHANGES (a user
+   who reduces motion must still see the drag highlight and progress fill) —
+   it just stops moving. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-float,
+  .animate-spin-slow,
+  .animate-pulse-soft,
+  .animate-halo,
+  .animate-marquee,
+  .progress-stripes,
+  .bg-grid-pattern-page {
+    animation: none !important;
+  }
+
+  .reveal,
+  .animate-fade-in-up,
+  .animate-badge-pop,
+  .animate-state-fade,
+  .bar-grow,
+  .line-draw {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .upload-surface,
+  .upload-surface:hover,
+  .upload-surface.is-dragging {
+    transform: none !important;
+  }
 }
