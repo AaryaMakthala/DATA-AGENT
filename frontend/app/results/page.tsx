@@ -15,22 +15,15 @@ import { ApiError, getResults, resolveAssetUrl } from "@/lib/api";
  *  - No `file_id` in the URL (marketing nav): renders STATIC MOCK data,
  *    shaped exactly like a real transformed ResultsVM, as a product preview.
  *  - `file_id` present: fetches GET /results/{file_id} and renders the full
- *    dashboard — dataset overview, executive summary, quality dashboard +
- *    health, before/after cleaning comparison, cleaning timeline + AI
- *    decisions, dataset insights, correlation highlights, statistical
- *    summary, visualizations, ML recommendation (models + why-not-others +
- *    readiness), processing metrics, quality issues, and a 5-item download
- *    center.
+ *    dashboard.
  *
- * IMPORTANT: every backend field is `.nullish()` in the Zod schema. If a
- * section isn't sent yet, the corresponding UI block is simply omitted —
- * this file never throws on a partial response, matching the defensive
- * style of the original implementation.
- *
- * VISUAL SYSTEM: every surface on this page pulls from the shared tokens in
- * globals.css (.card / .card-elevated / .pill-label / .icon-badge /
- * .label-mono / .table-chip / .btn) so it reads as one continuous site with
- * Home / Features / Upload — no bespoke pastel banners or raw hex colors.
+ * VISUAL SYSTEM (v2): every surface uses the site's real signature — the
+ * HARD OFFSET shadow (border-2 border-ink + box-shadow: Npx Npx 0 0 ink),
+ * the same language as .btn / .pill-label / .table-wrap — via the shared
+ * .card / .card-elevated classes in globals.css. Section headings follow
+ * Home's eyebrow-label + big-serif-heading rhythm instead of small corner
+ * labels. "Best fit" surfaces get a mustard-colored hard shadow (.card-accent)
+ * instead of a colored border, so the all-ink-border rule stays intact.
  */
 
 // ----------------------------- shared view-model -----------------------------
@@ -405,11 +398,7 @@ const numericStatSchema = z.object({
 
 const resultsResponseSchema = z
   .object({
-    // legacy top-level fields kept for backward compatibility during rollout
     file_id: z.string().min(1),
-    // Human-readable original upload filename (e.g. "large-dataset.csv"),
-    // populated by the backend from the sidecar saved during upload.
-    // Nullish for older reports written before this field was added.
     original_filename: z.string().nullish(),
     profile: z
       .object({
@@ -431,8 +420,6 @@ const resultsResponseSchema = z
       })
       .passthrough()
       .nullish(),
-
-    // new nested contract (response_builder.build_final_response)
     overview: overviewSchema,
     quality: qualitySchema,
     analysis: z
@@ -467,9 +454,9 @@ type ValidatedResults = z.infer<typeof resultsResponseSchema>;
 
 function DonutChart() {
   const segments = [
-    { color: "var(--color-info)", offset: 0, len: 45 },
+    { color: "var(--color-ink)", offset: 0, len: 45 },
     { color: "var(--color-mustard)", offset: 45, len: 32 },
-    { color: "var(--color-blue-accent)", offset: 77, len: 23 },
+    { color: "var(--color-cream-sunken)", offset: 77, len: 23 },
   ];
   const c = 2 * Math.PI * 40;
   return (
@@ -483,9 +470,9 @@ function DonutChart() {
         </g>
       </svg>
       <ul className="space-y-2 text-xs text-muted">
-        <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--color-info)" }} /> Low</li>
-        <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--color-mustard)" }} /> Medium</li>
-        <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--color-blue-accent)" }} /> High</li>
+        <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full border border-ink/20" style={{ background: "var(--color-ink)" }} /> Low</li>
+        <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full border border-ink/20" style={{ background: "var(--color-mustard)" }} /> Medium</li>
+        <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full border border-ink/20" style={{ background: "var(--color-cream-sunken)" }} /> High</li>
       </ul>
     </div>
   );
@@ -498,7 +485,7 @@ function FeatureImportanceChart() {
       {bars.map((v, i) => (
         <g key={i}>
           <text x="0" y={22 + i * 26} fontSize="8" fill="#6b6b6b">Feature {String.fromCharCode(65 + i)}</text>
-          <rect x="52" y={12 + i * 26} width={(v / 100) * 150} height="12" rx="2" fill="var(--color-info)" />
+          <rect x="52" y={12 + i * 26} width={(v / 100) * 150} height="12" rx="2" fill="var(--color-mustard)" />
         </g>
       ))}
     </svg>
@@ -506,7 +493,7 @@ function FeatureImportanceChart() {
 }
 
 function HeatmapChart() {
-  const palette = ["var(--color-danger)", "#d9ab8f", "#e9e2d4", "#a7c0d9", "var(--color-info)"];
+  const palette = ["var(--color-cream-sunken)", "#e3d19b", "var(--color-mustard)", "#c9a13a", "var(--color-ink)"];
   const grid = [
     [4, 2, 3, 1, 0], [2, 4, 0, 3, 1], [3, 0, 4, 2, 1], [1, 3, 2, 4, 0], [0, 1, 1, 0, 4],
   ];
@@ -519,34 +506,23 @@ function HeatmapChart() {
   );
 }
 
-// -------------------------- shared status color helpers ---------------------
-// Uses the semantic tokens added to globals.css (--color-success / -warning /
-// -danger) so this reads as one system with the rest of the site instead of
-// bright, un-themed hex.
+// -------------------------- shared color helpers -----------------------------
+// The palette is intentionally small: ink + mustard for everything good or
+// neutral (matching the rest of the site), and ONE red accent reserved for
+// genuine problems — a low score or a high-severity issue — so it actually
+// carries meaning instead of decorating half the page.
 
-function statusColor(score: number): string {
-  if (score >= 80) return "var(--color-success)";
-  if (score >= 60) return "var(--color-warning)";
-  return "var(--color-danger)";
+/** Accent color for a 0–100 score, used as TEXT/fill color, never as a
+ * background behind white text (the old approach that made scores hard to
+ * read and made the page feel like a muddy traffic-light dashboard). */
+function scoreAccent(score: number): string {
+  return score < 50 ? "var(--color-danger)" : "var(--color-mustard)";
 }
 
-function statusBg(score: number): string {
-  if (score >= 80) return "var(--color-success-bg)";
-  if (score >= 60) return "var(--color-warning-bg)";
-  return "var(--color-danger-bg)";
+function isHighSeverity(severity: string): boolean {
+  return severity.toLowerCase() === "high";
 }
 
-function severityColor(severity: string): string {
-  return severity.toLowerCase() === "high" ? "var(--color-danger)" : "var(--color-warning)";
-}
-
-function severityBg(severity: string): string {
-  return severity.toLowerCase() === "high" ? "var(--color-danger-bg)" : "var(--color-warning-bg)";
-}
-
-// Format a processing duration for display. Sub-second runs show "<1s" rather
-// than the misleading "0s" a plain integer/round produces on fast or
-// coarse-grained timings; everything else shows the second value normally.
 function formatDuration(seconds: number): string {
   if (seconds <= 0) return "<1s";
   if (seconds < 1) return "<1s";
@@ -584,11 +560,11 @@ const MOCK_VM: ResultsVM = {
   quality: {
     score: 92, status: "Excellent", sublabel: "Ready for ML",
     components: [
-      { key: "missing_values", label: "Missing values", score: 95, color: statusColor(95), explanation: "Only 1.2% of cells are missing." },
-      { key: "duplicates", label: "Duplicates", score: 98, color: statusColor(98), explanation: "0.5% of rows are exact duplicates." },
-      { key: "outliers", label: "Outliers", score: 88, color: statusColor(88), explanation: "3.4% of numeric values fall outside the IQR fences." },
-      { key: "feature_quality", label: "Feature quality", score: 93, color: statusColor(93), explanation: "1 of 15 columns was an identifier and carried no modeling signal." },
-      { key: "class_balance", label: "Balance", score: 84, color: statusColor(84), explanation: "Not applicable for a regression target." },
+      { key: "missing_values", label: "Missing values", score: 95, color: scoreAccent(95), explanation: "Only 1.2% of cells are missing." },
+      { key: "duplicates", label: "Duplicates", score: 98, color: scoreAccent(98), explanation: "0.5% of rows are exact duplicates." },
+      { key: "outliers", label: "Outliers", score: 88, color: scoreAccent(88), explanation: "3.4% of numeric values fall outside the IQR fences." },
+      { key: "feature_quality", label: "Feature quality", score: 93, color: scoreAccent(93), explanation: "1 of 15 columns was an identifier and carried no modeling signal." },
+      { key: "class_balance", label: "Balance", score: 84, color: scoreAccent(84), explanation: "Not applicable for a regression target." },
     ],
     issues: [
       { issue: "Two features are highly correlated (>0.85)", severity: "Medium", impact: "May inflate the apparent importance of one feature over the other.", recommendation: "Consider dropping one of the pair before modeling." },
@@ -689,7 +665,6 @@ const EMPTY_BEST: ResultsVM["best"] = {
 
 const ALLOWED_ASSET_PREFIXES = ["/charts/", "/download/"] as const;
 
-/** Resolve backend asset paths only when they are known safe chart/download URLs. */
 function safeResolveAssetUrl(path: string): string | undefined {
   const trimmed = path.trim();
   if (!trimmed) return undefined;
@@ -780,18 +755,11 @@ function buildRealVM(data: ValidatedResults): ResultsVM {
   const rec = data.ml_recommendation;
   const rows = data.overview?.rows ?? data.profile?.shape.rows ?? data.metadata?.row_count ?? 0;
   const cols = data.overview?.columns ?? data.profile?.shape.columns ?? data.metadata?.column_count ?? 0;
-  // Prefer the original_filename the backend resolved from the upload sidecar
-  // (e.g. "large-dataset.csv"), then fall back to the overview's dataset_name
-  // (which may itself be derived from original_filename on the backend), then
-  // lastly to a file_id-based name. This ensures the "Upload Successful" banner
-  // and Dataset Overview card never show a raw UUID hash to the user.
   const filename =
     data.original_filename ??
     data.overview?.dataset_name ??
     `${data.file_id}.csv`;
 
-  // Failure gate: if the backend flagged this dataset as unusable, surface
-  // the real validation error and render nothing else.
   const validity = data.data_validity;
   const invalidByGate = validity != null && validity.valid === false;
   const invalidByRec = rec?.problem_type === "invalid";
@@ -806,7 +774,6 @@ function buildRealVM(data: ValidatedResults): ResultsVM {
     };
   }
 
-  // --- overview ---
   const overview: OverviewVM | undefined = data.overview
     ? {
         datasetName: data.overview.dataset_name,
@@ -823,10 +790,8 @@ function buildRealVM(data: ValidatedResults): ResultsVM {
       }
     : undefined;
 
-  // --- health ---
   const rawHealth: HealthVM | undefined = data.quality?.health ?? undefined;
 
-  // --- executive summary ---
   const es = data.analysis?.executive_summary;
   const executiveSummary: ExecutiveSummaryVM | undefined = es
     ? {
@@ -838,19 +803,17 @@ function buildRealVM(data: ValidatedResults): ResultsVM {
       }
     : undefined;
 
-  // --- insights ---
   const insights: InsightVM[] | undefined = data.analysis?.dataset_insights?.length
     ? data.analysis.dataset_insights.map((i) => ({ title: i.title, value: i.value, detail: i.detail }))
     : undefined;
 
-  // --- quality ---
   const quality: QualityVM | undefined = data.quality
     ? {
         score: data.quality.score,
         status: data.quality.dashboard?.status ?? (data.quality.score >= 80 ? "Good" : data.quality.score >= 60 ? "Fair" : "Needs attention"),
         sublabel: data.quality.dashboard?.sublabel ?? "",
         components: (data.quality.dashboard?.components ?? []).map((c) => ({
-          key: c.key, label: c.label, score: c.score, color: statusColor(c.score), explanation: c.explanation,
+          key: c.key, label: c.label, score: c.score, color: scoreAccent(c.score), explanation: c.explanation,
         })),
         issues: (data.quality.issues ?? []).map((i) => ({
           issue: i.issue, severity: i.severity, impact: i.impact, recommendation: i.recommendation,
@@ -858,12 +821,10 @@ function buildRealVM(data: ValidatedResults): ResultsVM {
       }
     : undefined;
 
-  // --- before / after ---
   const beforeAfter: BeforeAfterRowVM[] | undefined = data.before_after?.table?.length
     ? data.before_after.table
     : undefined;
 
-  // --- cleaning timeline + AI decisions ---
   const timeline: TimelineItemVM[] | undefined = data.cleaning_summary?.timeline?.length
     ? data.cleaning_summary.timeline.map((t) => ({ action: t.action, reason: t.reason, confidence: t.confidence }))
     : undefined;
@@ -871,7 +832,6 @@ function buildRealVM(data: ValidatedResults): ResultsVM {
     ? data.cleaning_summary.ai_decisions.map((d) => ({ decision: d.decision, reason: d.reason, confidence: d.confidence }))
     : undefined;
 
-  // --- charts ---
   const chartsFromManifest: ChartVM[] = (data.visualizations?.charts ?? [])
     .map((c, idx) => {
       const url = c.path ? safeResolveAssetUrl(c.path) : undefined;
@@ -886,7 +846,6 @@ function buildRealVM(data: ValidatedResults): ResultsVM {
     })
     .filter((c) => c.url !== undefined || c.title);
 
-  // --- ML recommendation ---
   const ranked = rec?.models ?? [];
   const top = ranked[0];
   const topFill = confidenceToFill(top?.confidence);
@@ -926,13 +885,11 @@ function buildRealVM(data: ValidatedResults): ResultsVM {
         .map(([label, v]) => ({ label, stars: v!.stars, display: v!.display }))
     : undefined;
 
-  // --- processing metrics ---
   const pm = data.metadata?.processing_metrics;
   const processingMetrics: ProcessingMetricVM[] | undefined = pm
     ? Object.entries(pm).map(([key, seconds]) => ({ label: METRIC_LABELS[key] ?? key, seconds }))
     : undefined;
 
-  // --- downloads ---
   const dl = data.downloads;
   const downloads: DownloadsVM | undefined = dl
     ? {
@@ -944,12 +901,8 @@ function buildRealVM(data: ValidatedResults): ResultsVM {
       }
     : undefined;
 
-  // --- legacy profile-derived sections (kept for backward compatibility) ---
   const profile = data.profile;
   const correlations = topCorrelations(profile?.correlations);
-  // Identifier columns (ID/PassengerId/Name/...) are dropped during cleaning
-  // and carry no modeling signal, so they must not appear in the Statistical
-  // Summary as if they were useful numeric features (audit item #3).
   const excludedCols = new Set(rec?.excluded_columns ?? []);
   const stats: StatRowVM[] | undefined = profile?.numeric_summary
     ? Object.entries(profile.numeric_summary)
@@ -1026,8 +979,6 @@ function ChartImage({ title, url }: { title: string; url: string }) {
 }
 
 // --------------------------- scroll-reveal wrapper ---------------------------
-// Same IntersectionObserver fade-up pattern used on Home / Features / Upload,
-// so Results feels like one continuous site instead of appearing instantly.
 
 function Reveal({
   children,
@@ -1069,12 +1020,93 @@ function Reveal({
 
 // --------------------------- small presentational bits ----------------------
 
-function SectionHeading({ children, sub }: { children: React.ReactNode; sub?: string }) {
+/** Home-style section header, but the eyebrow now renders as an actual
+ * bordered pill with the site's signature hard-offset shadow and the same
+ * up-left hover lift as every button/pill on the site (translate + shadow
+ * grow on hover, press-down on click) — not just static mono text. */
+/** Small generic glyph shown inside every section-heading button — keeps
+ * headings from being pure text, per the "button format, not just text"
+ * requirement, without needing a bespoke icon per section. */
+function HeadingGlyph() {
   return (
-    <div className="mt-16 flex items-end justify-between">
-      <h2 className="display-heading text-2xl font-bold text-ink">{children}</h2>
-      {sub && <span className="label-mono text-[10px]">{sub}</span>}
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8" />
+    </svg>
+  );
+}
+
+/** Section heading — rendered as an actual button (bright mustard fill, mono
+ * font, ink border, hard black shadow, hover-lift + press animation exactly
+ * matching .btn) rather than plain heading text. */
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mt-20">
+      <div className="section-heading-btn" role="heading" aria-level={2}>
+        <HeadingGlyph />
+        {children}
+      </div>
     </div>
+  );
+}
+
+/** Small SVG glyph per model, chosen from the model name so the "Best Model"
+ * section has real iconography rather than text-only cards. */
+function ModelIcon({ name }: { name: string }) {
+  const common = {
+    width: 17,
+    height: 17,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.9,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true,
+  };
+  const n = name.toLowerCase();
+  if (n.includes("forest") || n.includes("tree")) {
+    return (
+      <svg {...common}>
+        <path d="M12 3l4 5H8l4-5z" />
+        <path d="M12 8l5 6H7l5-6z" />
+        <path d="M12 14v7" />
+      </svg>
+    );
+  }
+  if (n.includes("boost") || n.includes("gradient") || n.includes("xgb")) {
+    return (
+      <svg {...common}>
+        <line x1="6" y1="20" x2="6" y2="12" />
+        <line x1="12" y1="20" x2="12" y2="6" />
+        <line x1="18" y1="20" x2="18" y2="10" />
+      </svg>
+    );
+  }
+  if (n.includes("regress") || n.includes("linear")) {
+    return (
+      <svg {...common}>
+        <path d="M4 19V5" />
+        <path d="M4 19h16" />
+        <path d="M6 15l4-4 3 3 6-7" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
+    </svg>
+  );
+}
+
+/** Trophy glyph used inside "Best Fit" pills so the recommendation is marked
+ * with real iconography, not text alone. */
+function TrophyIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 21h8M12 17v4M7 4h10v4a5 5 0 0 1-10 0V4z" />
+      <path d="M7 5H4a1 1 0 0 0-1 1c0 2.5 1.5 4 4 4M17 5h3a1 1 0 0 1 1 1c0 2.5-1.5 4-4 4" />
+    </svg>
   );
 }
 
@@ -1083,34 +1115,71 @@ function StatCell({ label, value }: { label: string; value: string | number | un
   return (
     <div>
       <div className="label-mono text-[10px]">{label}</div>
-      <div className="mt-1 font-display text-xl font-bold text-ink">{value}</div>
+      <div className="mt-1 font-mono text-lg font-bold tracking-tight text-ink">{value}</div>
     </div>
   );
 }
 
 function ProgressBar({ label, value, onClick, active }: { label: string; value: number; onClick?: () => void; active?: boolean }) {
   const clamped = Math.max(0, Math.min(100, value));
-  const color = statusColor(clamped);
+  const color = scoreAccent(clamped);
   return (
     <div className={onClick ? "cursor-pointer" : undefined} onClick={onClick}>
       <div className="flex items-center justify-between text-xs">
         <span className={active ? "font-bold text-ink" : "text-muted"}>{label}</span>
         <span className="font-bold text-ink">{clamped}</span>
       </div>
-      <div className="mt-1 h-2 w-full overflow-hidden rounded-pill border border-ink/10 bg-cream-sunken">
-        <div className="h-full rounded-pill transition-all" style={{ width: `${clamped}%`, background: color }} />
+      <div className="mt-1 h-2 w-full overflow-hidden rounded-pill border-2 border-ink bg-cream-sunken">
+        <div className="h-full transition-all" style={{ width: `${clamped}%`, background: color }} />
       </div>
     </div>
   );
 }
 
+/** Bouncing "there's more below" cue — points at the full analysis + download
+ * section further down the page and smooth-scrolls there on click. */
+function ScrollCue() {
+  const scrollToDownloads = () => {
+    document.getElementById("download-center")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  return (
+    <button
+      type="button"
+      onClick={scrollToDownloads}
+      className="group mx-auto mt-6 flex flex-col items-center gap-2 text-center"
+      aria-label="Scroll to full analysis and downloads"
+    >
+      <span className="font-mono text-[10px] font-bold uppercase tracking-[0.12em] text-ink transition-opacity group-hover:opacity-70">
+        Know more about your data — full analysis &amp; every download is below
+      </span>
+      <span
+        className="icon-badge animate-float"
+        style={{ animationDuration: "2.2s" }}
+        aria-hidden="true"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </span>
+    </button>
+  );
+}
+
+/** Small download-icon svg reused by the two centered "download" buttons. */
+function DownloadIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 4v11" /><polyline points="8 11 12 15 16 11" /><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" />
+    </svg>
+  );
+}
 function CloseButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-label="Close"
-      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-ink bg-cream-card text-ink transition-all duration-200 hover:-translate-y-0.5 hover:bg-mustard"
+      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-ink bg-cream-card text-ink shadow-[var(--shadow-hard-sm)] transition-all duration-200 hover:-translate-x-0.5 hover:-translate-y-0.5 hover:bg-mustard hover:shadow-[var(--shadow-hard)]"
     >
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
         <line x1="18" y1="6" x2="6" y2="18" />
@@ -1123,12 +1192,12 @@ function CloseButton({ onClick }: { onClick: () => void }) {
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 px-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       onClick={onClose}
     >
-      <div className="card-elevated w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+      <div className="card-elevated w-full max-w-md !p-6" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-4">
           <div className="label-mono text-[10px]">{title}</div>
           <CloseButton onClick={onClose} />
@@ -1151,7 +1220,6 @@ const LOADING_MESSAGES = [
   "Almost done…",
 ];
 
-/** Two-tone spinning ring, same visual technique as the Home page donut/loader. */
 function SpinRing() {
   return (
     <svg viewBox="0 0 36 36" className="h-[72px] w-[72px] animate-spin-slow" style={{ animationDuration: "2.4s" }} aria-hidden="true">
@@ -1170,10 +1238,7 @@ function SpinRing() {
 
 function LoadingExperience() {
   const [msgIndex, setMsgIndex] = useState(0);
-  // Pipeline stages before "Complete" are treated as in-progress for the
-  // purposes of this ambient loader (we don't get granular per-stage
-  // callbacks from the backend, so stage 0 is always "current").
-  const currentStage = 2; // "Analyzing" — the stage most requests spend the longest in
+  const currentStage = 2;
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -1184,7 +1249,7 @@ function LoadingExperience() {
 
   return (
     <Reveal className="mt-6">
-      <div className="card-elevated mx-auto max-w-md p-8 text-center" role="status" aria-live="polite" aria-busy="true">
+      <div className="card-elevated mx-auto max-w-md !p-8 text-center" role="status" aria-live="polite" aria-busy="true">
         <div className="flex justify-center">
           <SpinRing />
         </div>
@@ -1233,23 +1298,47 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
     return (
       <Reveal className="mt-6">
         <div
-          className="rounded-[20px] border-2 border-ink px-6 py-14 text-center"
+          className="rounded-[24px] border-2 border-ink px-6 py-16 text-center shadow-[var(--shadow-hard)]"
           style={{ backgroundColor: "var(--color-danger-bg)" }}
           role="alert"
         >
+          <div
+            className="section-heading-btn mx-auto"
+            style={{ backgroundColor: "var(--color-danger)", color: "#fff" }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+              <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            Analysis Failed
+          </div>
+
           <span
-            className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border-2 border-ink"
+            className="animate-pulse-soft mx-auto mt-7 flex h-20 w-20 items-center justify-center rounded-full border-2 border-ink"
             style={{ background: "var(--color-danger)" }}
             aria-hidden="true"
           >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <line x1="12" y1="8" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /><circle cx="12" cy="12" r="9" />
             </svg>
           </span>
+
           <h1 className="display-heading mt-6 text-3xl sm:text-4xl">This dataset can&apos;t be analyzed</h1>
-          <p className="mx-auto mt-4 max-w-xl text-sm text-muted">{vm.invalidMessage}</p>
-          <p className="mt-2 text-xs text-muted">File: {vm.filename}</p>
-          <Link href="/upload" className="btn btn-yellow mt-8 inline-flex">Try a different file</Link>
+          <p className="mx-auto mt-4 max-w-xl text-sm text-ink/80">{vm.invalidMessage}</p>
+          <span className="mt-3 inline-flex items-center rounded-pill border-2 border-ink bg-cream-card px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.1em] text-ink shadow-[var(--shadow-hard-sm)]">
+            File: {vm.filename}
+          </span>
+
+          <div className="mt-8">
+            <Link href="/upload" className="btn btn-yellow group inline-flex !py-3.5 !px-7">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-ink bg-cream-card transition-transform duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)] group-hover:-translate-x-0.5">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="19 12 5 12" /><polyline points="12 19 5 12 12 5" />
+                </svg>
+              </span>
+              Try a Different File
+            </Link>
+          </div>
         </div>
       </Reveal>
     );
@@ -1259,30 +1348,14 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
 
   return (
     <>
-      {/* Success banner */}
-      <Reveal className="mt-6">
-        <div className="card-elevated flex flex-wrap items-center justify-between gap-4 !p-6" style={{ backgroundColor: "var(--color-success-bg)" }}>
-          <div className="flex items-center gap-4">
-            <span className="icon-badge" style={{ backgroundColor: "var(--color-success)", color: "#fff" }} aria-hidden="true">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="5 12 10 17 19 7" /></svg>
-            </span>
-            <div>
-              <div className="text-sm font-bold text-ink">Upload Successful!</div>
-              <p className="text-xs text-muted">File: {vm.filename}</p>
-            </div>
-          </div>
-          <span className="pill-label">{vm.rows} rows · {vm.cols} columns</span>
-        </div>
-      </Reveal>
-
       {/* Dataset overview */}
       {vm.overview && (
-        <Reveal delay={60} className="mt-6">
-          <div className="card-elevated p-6">
+        <Reveal className="mt-6">
+          <div className="card-elevated !p-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <div className="label-mono text-[10px]">Dataset Overview</div>
-                <div className="mt-1 font-display text-xl font-bold text-ink">{vm.overview.datasetName}</div>
+                <span className="eyebrow-pill">Dataset Overview</span>
+                <div className="mt-1 font-mono text-xl font-bold tracking-tight text-ink">{vm.overview.datasetName}</div>
               </div>
               {vm.overview.readiness && (
                 <div className="text-right">
@@ -1291,7 +1364,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
                 </div>
               )}
             </div>
-            <div className="mt-6 grid grid-cols-2 gap-6 border-t border-line pt-6 sm:grid-cols-4 lg:grid-cols-6">
+            <div className="mt-6 grid grid-cols-2 gap-6 border-t-2 border-line pt-6 sm:grid-cols-4 lg:grid-cols-6">
               <StatCell label="Rows" value={formatNumber(vm.overview.rows)} />
               <StatCell label="Columns" value={vm.overview.columns} />
               <StatCell label="Memory" value={vm.overview.memoryUsage} />
@@ -1302,15 +1375,44 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
               <StatCell label="Status" value={vm.overview.processingStatus} />
               <StatCell label="Processing Time" value={vm.overview.processingTimeSeconds !== undefined ? formatDuration(vm.overview.processingTimeSeconds) : undefined} />
             </div>
+
+            {/* Centered download action at the bottom of this box only */}
+            <div className="mt-6 flex justify-center border-t-2 border-line pt-6">
+              {vm.downloads?.cleanedCsv ? (
+                <a href={vm.downloads.cleanedCsv} download className="btn btn-yellow group !py-3.5 !px-7">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-ink bg-cream-card transition-transform duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)] group-hover:translate-y-0.5">
+                    <DownloadIcon />
+                  </span>
+                  Download Cleaned CSV
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => document.getElementById("download-center")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                  className="btn btn-yellow group !py-3.5 !px-7"
+                >
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-ink bg-cream-card transition-transform duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)] group-hover:translate-y-0.5">
+                    <DownloadIcon />
+                  </span>
+                  Download Cleaned CSV
+                </button>
+              )}
+            </div>
           </div>
         </Reveal>
       )}
+
+      {/* Scroll cue — now sits right after the Dataset Overview box, pointing
+          at the full analysis + downloads further down. Rendered directly
+          (no Reveal wrapper): it's already in view on page load, so a
+          scroll-triggered fade-in had nothing to trigger it. */}
+      <ScrollCue />
 
       {/* Executive summary — 4-panel */}
       {vm.executiveSummary && (
         <>
           <Reveal><SectionHeading>Executive Summary</SectionHeading></Reveal>
-          <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
             {[
               { label: "Overview", body: vm.executiveSummary.overview ? <p className="mt-2 text-sm leading-relaxed text-ink">{vm.executiveSummary.overview}</p> : <p className="mt-2 text-sm text-muted">—</p> },
               { label: "Key Findings", body: vm.executiveSummary.keyFindings.length ? <ul className="mt-2 space-y-1.5 text-sm text-ink">{vm.executiveSummary.keyFindings.map((f, i) => <li key={i}>• {f}</li>)}</ul> : <p className="mt-2 text-sm text-muted">None flagged.</p> },
@@ -1336,12 +1438,12 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
         <>
           <Reveal><SectionHeading>Data Quality Dashboard</SectionHeading></Reveal>
           <Reveal delay={60}>
-            <div className="card-elevated mt-5 flex flex-col gap-6 p-6">
+            <div className="card-elevated mt-6 flex flex-col gap-6 !p-6">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-8">
                 <div className="flex items-center gap-4">
                   <div
-                    className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full border-2 border-ink text-xl font-bold text-white"
-                    style={{ background: statusColor(vm.quality.score) }}
+                    className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full border-2 border-ink bg-ink font-display text-xl font-bold shadow-[var(--shadow-hard-sm)]"
+                    style={{ color: scoreAccent(vm.quality.score) }}
                     aria-label={`Data quality score ${vm.quality.score}`}
                   >
                     {vm.quality.score}
@@ -1355,7 +1457,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
               </div>
 
               {vm.quality.components.length > 0 && (
-                <div className="grid grid-cols-1 gap-4 border-t border-line pt-5 sm:grid-cols-2 lg:grid-cols-5">
+                <div className="grid grid-cols-1 gap-4 border-t-2 border-line pt-5 sm:grid-cols-2 lg:grid-cols-5">
                   {vm.quality.components.map((c) => (
                     <div key={c.key}>
                       <ProgressBar
@@ -1379,10 +1481,10 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       {/* Dataset health */}
       {vm.health && (
         <Reveal className="mt-6">
-          <div className="card-elevated flex items-center gap-5 p-6">
+          <div className="card-elevated flex items-center gap-5 !p-6">
             <div
-              className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[14px] border-2 border-ink text-sm font-bold text-white"
-              style={{ background: statusColor(vm.health.score) }}
+              className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[14px] border-2 border-ink bg-ink font-display text-sm font-bold shadow-[var(--shadow-hard-sm)]"
+              style={{ color: scoreAccent(vm.health.score) }}
             >
               {vm.health.score}
             </div>
@@ -1400,7 +1502,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
         <>
           <Reveal><SectionHeading>Before vs. After Cleaning</SectionHeading></Reveal>
           <Reveal delay={40}>
-            <p className="mt-2 text-xs text-muted">
+            <p className="mt-3 text-xs text-muted">
               Outlier counts are independent IQR detections on each dataset — a different
               &ldquo;after&rdquo; count reflects re-measurement on the cleaned data, not damage from cleaning.
             </p>
@@ -1422,7 +1524,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
                       <td className="font-bold text-ink">{r.metric}</td>
                       <td>{r.before}</td>
                       <td>{r.after}</td>
-                      <td style={{ color: r.informational ? undefined : String(r.difference).startsWith("-") ? "var(--color-success)" : r.difference === "0" ? undefined : "var(--color-danger)" }}>{r.difference}</td>
+                      <td className="font-bold text-ink">{r.difference}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1437,13 +1539,13 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
         <>
           <Reveal><SectionHeading>Cleaning Timeline</SectionHeading></Reveal>
           <Reveal delay={60}>
-            <div className="card-elevated mt-5 p-6">
-              <ol className="relative space-y-5 border-l-2 border-line pl-6">
+            <div className="card-elevated mt-6 !p-6">
+              <ol className="relative space-y-5 border-l-2 border-ink pl-6">
                 {vm.timeline.map((t, i) => (
                   <li key={i} className="relative">
                     <span
-                      className="absolute -left-[31px] flex h-6 w-6 items-center justify-center rounded-full border-2 border-ink text-[10px] font-bold text-white"
-                      style={{ background: "var(--color-success)" }}
+                      className="absolute -left-[31px] flex h-6 w-6 items-center justify-center rounded-full border-2 border-ink bg-ink text-[10px] font-bold"
+                      style={{ color: "var(--color-mustard)" }}
                     >✓</span>
                     <div className="text-sm font-bold text-ink">{t.action}</div>
                     {t.reason && <p className="mt-1 text-xs text-muted">{t.reason}</p>}
@@ -1460,11 +1562,11 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       {vm.aiDecisions && vm.aiDecisions.length > 0 && (
         <>
           <Reveal><SectionHeading>AI Decisions</SectionHeading></Reveal>
-          <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {vm.aiDecisions.map((d, i) => (
               <Reveal key={i} delay={i * 60}>
                 <div className="card h-full">
-                  <span className="table-chip" style={{ borderColor: "var(--color-info)", color: "var(--color-info)" }}>{d.confidence} confidence</span>
+                  <span className="table-chip">{d.confidence} confidence</span>
                   <div className="mt-3 text-sm font-bold text-ink">{d.decision}</div>
                   <p className="mt-2 text-xs text-muted">{d.reason}</p>
                 </div>
@@ -1478,7 +1580,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       {vm.insights && vm.insights.length > 0 && (
         <>
           <Reveal><SectionHeading>Dataset Insights</SectionHeading></Reveal>
-          <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {vm.insights.map((ins, i) => (
               <Reveal key={i} delay={i * 60}>
                 <div className="card h-full">
@@ -1494,18 +1596,28 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
 
       {/* Best model heading */}
       <Reveal>
-        <h1 className="display-heading mt-16 text-4xl sm:text-5xl">
-          Best Model for <span className="italic underline decoration-mustard decoration-[6px] underline-offset-[8px]">Your Dataset</span>
-        </h1>
+        <div className="mt-20">
+          <div className="section-heading-btn" role="heading" aria-level={1}>
+            <TrophyIcon />
+            Recommendation
+          </div>
+          <h1 className="display-heading mt-4 text-4xl sm:text-5xl">
+            Best Model for <span className="italic underline decoration-mustard decoration-[6px] underline-offset-[8px]">Your Dataset</span>
+          </h1>
+        </div>
       </Reveal>
 
       <Reveal delay={80}>
-        <div className="card-elevated mt-6 grid grid-cols-1 gap-8 p-8 md:grid-cols-2">
-          <div className="md:border-r md:border-line md:pr-8">
+        <div className="card-elevated card-accent mt-6 grid grid-cols-1 gap-8 !p-8 md:grid-cols-2">
+          <div className="md:border-r-2 md:border-line md:pr-8">
             <div className="label-mono text-[10px]">{vm.best.recommendedLabel}</div>
             <div className="mt-2 flex flex-wrap items-center gap-3">
+              <span className="icon-chip !h-11 !w-11" aria-hidden="true"><ModelIcon name={vm.best.name} /></span>
               <span className="font-display text-2xl font-bold text-ink">{vm.best.name}</span>
-              <span className="pill-label">{vm.best.badge}</span>
+              <span className="pill-label">
+                <TrophyIcon />
+                {vm.best.badge}
+              </span>
             </div>
             <p className="mt-4 max-w-sm text-sm text-muted">{vm.best.description}</p>
           </div>
@@ -1515,7 +1627,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
               <div className="mt-2 flex items-center gap-2">
                 <span className="font-display text-4xl font-bold text-ink">{vm.best.scoreValue}</span>
                 {showConfidenceArrow && (
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-ink)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <line x1="12" y1="19" x2="12" y2="6" /><polyline points="6 12 12 6 18 12" />
                   </svg>
                 )}
@@ -1536,31 +1648,36 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
 
       {/* Model comparison — enriched cards */}
       <Reveal><SectionHeading>Model Comparison</SectionHeading></Reveal>
-      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {vm.models.map((m, i) => (
           <Reveal key={m.name} delay={i * 60}>
-            <div
-              className="card h-full"
-              style={m.isBest ? { borderWidth: "2px", borderColor: "var(--color-ink)", boxShadow: "var(--shadow-hard-sm)" } : undefined}
-            >
+            <div className={`card h-full ${m.isBest ? "card-accent" : ""}`}>
               <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-bold text-ink">{m.name}</div>
-                {m.isBest && <span className="pill-label !py-1 !px-2.5 !text-[9px]">Best Fit</span>}
+                <div className="flex items-center gap-2.5">
+                  <span className="icon-chip" aria-hidden="true"><ModelIcon name={m.name} /></span>
+                  <div className="text-sm font-bold text-ink">{m.name}</div>
+                </div>
+                {m.isBest && (
+                  <span className="pill-label !py-1 !px-2.5 !text-[9px]">
+                    <TrophyIcon />
+                    Best Fit
+                  </span>
+                )}
               </div>
               <div className="label-mono mt-1.5 text-[10px]">{m.confidence} confidence</div>
               <p className="mt-2 text-xs leading-relaxed text-muted">{m.reason}</p>
               {m.specs && Object.keys(m.specs).length > 0 && (
-                <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-line pt-3 text-[10.5px]">
+                <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 border-t-2 border-line pt-3 text-[10.5px]">
                   {Object.entries(m.specs).map(([k, v]) => (
                     <div key={k} className="flex justify-between text-muted"><span>{k}</span><span className="text-ink">{v}</span></div>
                   ))}
                 </div>
               )}
               {(m.advantages.length > 0 || m.disadvantages.length > 0) && (
-                <div className="mt-3 grid grid-cols-2 gap-3 border-t border-line pt-3 text-[10.5px]">
+                <div className="mt-3 grid grid-cols-2 gap-3 border-t-2 border-line pt-3 text-[10.5px]">
                   <div>
                     <div className="mb-1 label-mono text-[9px]">Pros</div>
-                    <ul className="space-y-0.5" style={{ color: "var(--color-success)" }}>{m.advantages.map((a, ai) => <li key={ai}>• {a}</li>)}</ul>
+                    <ul className="space-y-0.5 text-ink">{m.advantages.map((a, ai) => <li key={ai}>• {a}</li>)}</ul>
                   </div>
                   <div>
                     <div className="mb-1 label-mono text-[9px]">Cons</div>
@@ -1578,7 +1695,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
         <>
           <Reveal><SectionHeading>Why Not Other Models</SectionHeading></Reveal>
           <Reveal delay={60}>
-            <div className="card-elevated mt-5 divide-y divide-line !p-2">
+            <div className="card-elevated mt-6 divide-y-2 divide-line !p-2">
               {vm.whyNotOthers.map((w, i) => (
                 <div key={i} className="px-4 py-3 text-xs leading-relaxed text-ink">
                   <span className="font-bold">{w.model}</span> — {w.explanation.replace(`${w.model} `, "")}
@@ -1594,7 +1711,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
         <>
           <Reveal><SectionHeading>Model Readiness</SectionHeading></Reveal>
           <Reveal delay={60}>
-            <div className="card-elevated mt-5 divide-y divide-line !p-2">
+            <div className="card-elevated mt-6 divide-y-2 divide-line !p-2">
               {vm.readinessRows.map((r) => (
                 <div key={r.label} className="flex items-center justify-between px-4 py-3 text-sm text-ink">
                   <span>{r.label}</span>
@@ -1610,7 +1727,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       {vm.charts.length > 0 && (
         <>
           <Reveal><SectionHeading>Visual Insights</SectionHeading></Reveal>
-          <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-6 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
             {vm.charts.map((chart, i) => (
               <Reveal key={chart.key} delay={i * 70}>
                 <button
@@ -1646,7 +1763,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
         <>
           <Reveal><SectionHeading>Statistical Summary</SectionHeading></Reveal>
           <Reveal delay={60}>
-            <div className="table-wrap mt-5">
+            <div className="table-wrap mt-6">
               <table>
                 <thead>
                   <tr>
@@ -1680,7 +1797,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       {vm.correlations && vm.correlations.length > 0 && (
         <>
           <Reveal><SectionHeading>Correlation Highlights</SectionHeading></Reveal>
-          <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
             {vm.correlations.map((c, i) => (
               <Reveal key={`${c.a}-${c.b}`} delay={i * 50}>
                 <div className="card flex items-center justify-between !p-4">
@@ -1699,14 +1816,14 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
         <>
           <Reveal><SectionHeading>Processing Metrics</SectionHeading></Reveal>
           <Reveal delay={60}>
-            <div className="card-elevated mt-5 space-y-3 p-6">
+            <div className="card-elevated mt-6 space-y-3 !p-6">
               {(() => {
                 const max = Math.max(...vm.processingMetrics!.map((m) => m.seconds), 0.01);
                 return vm.processingMetrics!.map((m) => (
                   <div key={m.label} className="grid grid-cols-[120px_1fr_50px] items-center gap-3 text-xs">
                     <span className="text-muted">{m.label}</span>
-                    <span className="h-2 w-full overflow-hidden rounded-pill border border-ink/10 bg-cream-sunken">
-                      <span className="bar-grow block h-full origin-left rounded-pill" style={{ width: `${(m.seconds / max) * 100}%`, background: "var(--color-info)" }} />
+                    <span className="h-2 w-full overflow-hidden rounded-pill border-2 border-ink bg-cream-sunken">
+                      <span className="bar-grow block h-full origin-left" style={{ width: `${(m.seconds / max) * 100}%`, background: "var(--color-mustard)" }} />
                     </span>
                     <span className="text-right font-bold text-ink">{m.seconds}s</span>
                   </div>
@@ -1721,7 +1838,7 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       {vm.quality && vm.quality.issues.length > 0 && (
         <>
           <Reveal><SectionHeading>Data Quality Issues</SectionHeading></Reveal>
-          <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
             {vm.quality.issues.map((iss, i) => (
               <Reveal key={i} delay={i * 60}>
                 <div className="card h-full">
@@ -1729,7 +1846,11 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
                     <span className="text-sm font-bold text-ink">{iss.issue}</span>
                     <span
                       className="table-chip shrink-0"
-                      style={{ borderColor: severityColor(iss.severity), color: severityColor(iss.severity), backgroundColor: severityBg(iss.severity) }}
+                      style={
+                        isHighSeverity(iss.severity)
+                          ? { borderColor: "var(--color-danger)", color: "var(--color-danger)", backgroundColor: "var(--color-danger-bg)" }
+                          : undefined
+                      }
                     >
                       {iss.severity}
                     </span>
@@ -1747,14 +1868,13 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       {vm.warnings && vm.warnings.length > 0 && (
         <>
           <Reveal><SectionHeading>Warnings</SectionHeading></Reveal>
-          <ul className="mt-4 flex flex-col gap-2.5">
+          <ul className="mt-5 flex flex-col gap-2.5">
             {vm.warnings.map((w, i) => (
               <Reveal key={i} delay={i * 50}>
                 <li
-                  className="flex items-center gap-3 rounded-[14px] border-2 border-ink px-4 py-3 text-sm text-ink"
-                  style={{ backgroundColor: "var(--color-warning-bg)" }}
+                  className="flex items-center gap-3 rounded-[14px] border-2 border-ink bg-cream-sunken px-4 py-3 text-sm text-ink shadow-[var(--shadow-hard-sm)]"
                 >
-                  <span className="icon-badge !h-8 !w-8 shrink-0" style={{ backgroundColor: "var(--color-warning)", color: "#fff" }} aria-hidden="true">
+                  <span className="icon-badge !h-8 !w-8 shrink-0" style={{ backgroundColor: "var(--color-mustard)" }} aria-hidden="true">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
                       <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
@@ -1775,34 +1895,36 @@ function ResultsView({ vm }: { vm: ResultsVM }) {
       </Reveal>
 
       {/* Download center — 5 items */}
-      <Reveal><SectionHeading>Download Center</SectionHeading></Reveal>
-      <div className="mb-16 mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        {[
-          { key: "cleanedCsv", label: "Cleaned CSV", sub: "Your cleaned dataset", href: vm.downloads?.cleanedCsv },
-          { key: "analysisReport", label: "Analysis Report", sub: "Full write-up", href: vm.downloads?.analysisReport },
-          { key: "jsonResults", label: "JSON Results", sub: "Machine-readable", href: vm.downloads?.jsonResults },
-          { key: "chartsZip", label: "Charts (ZIP)", sub: "All generated charts", href: vm.downloads?.chartsZip },
-          { key: "cleaningLog", label: "Cleaning Log", sub: "Timeline + decisions", href: vm.downloads?.cleaningLog },
-        ].map((d, i) => (
-          <Reveal key={d.key} delay={i * 50}>
-            <div className="card flex h-full flex-col gap-3">
-              <span className="icon-badge !h-9 !w-9" aria-hidden="true">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M12 4v11" /><polyline points="8 11 12 15 16 11" /><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" />
-                </svg>
-              </span>
-              <div>
-                <div className="text-xs font-bold text-ink">{d.label}</div>
-                <p className="text-[10.5px] text-muted">{d.sub}</p>
-              </div>
-              {d.href ? (
-                <a href={d.href} download className="btn btn-yellow !py-2 !text-[11px] justify-center">Download</a>
+      <div id="download-center" className="scroll-mt-24">
+        <Reveal><SectionHeading>Download Center</SectionHeading></Reveal>
+        <div className="mb-16 mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          {[
+            { key: "cleanedCsv", label: "Cleaned CSV", sub: "Your cleaned dataset", href: vm.downloads?.cleanedCsv },
+            { key: "analysisReport", label: "Analysis Report", sub: "Full write-up", href: vm.downloads?.analysisReport },
+            { key: "jsonResults", label: "JSON Results", sub: "Machine-readable", href: vm.downloads?.jsonResults },
+            { key: "chartsZip", label: "Charts (ZIP)", sub: "All generated charts", href: vm.downloads?.chartsZip },
+            { key: "cleaningLog", label: "Cleaning Log", sub: "Timeline + decisions", href: vm.downloads?.cleaningLog },
+          ].map((d, i) => (
+            <Reveal key={d.key} delay={i * 50}>
+              <div className="card flex h-full flex-col gap-3">
+                <span className="icon-badge !h-9 !w-9" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 4v11" /><polyline points="8 11 12 15 16 11" /><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" />
+                  </svg>
+                </span>
+                <div>
+                  <div className="text-xs font-bold text-ink">{d.label}</div>
+                  <p className="text-[10.5px] text-muted">{d.sub}</p>
+                </div>
+                {d.href ? (
+                  <a href={d.href} download className="btn btn-yellow !py-2 !text-[11px] justify-center">Download</a>
               ) : (
                 <button type="button" className="btn !py-2 !text-[11px] justify-center opacity-50 cursor-not-allowed" disabled aria-disabled="true">Unavailable</button>
               )}
             </div>
           </Reveal>
         ))}
+        </div>
       </div>
     </>
   );
@@ -1870,19 +1992,35 @@ function ResultsContent() {
   }, [fileId, retryToken]);
 
   return (
-    <div className="relative min-h-screen bg-cream">
+    <div className="relative flex min-h-screen flex-col bg-cream">
       <div aria-hidden="true" className="pointer-events-none fixed inset-0 -z-10 bg-grid-pattern-page" />
 
-      <div className="mx-auto w-full max-w-6xl px-6">
+      <div className="mx-auto w-full max-w-6xl flex-1 px-6">
         <SiteNav />
 
-        <div className="pt-8">
+        {/* Back link + upload-success indicator, side by side, right under the
+            navbar. Rendered directly (no Reveal) so they're present the
+            instant the page paints instead of waiting on a scroll trigger. */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-8">
           <Link href="/upload" className="label-mono transition-colors hover:text-ink">← Back to Upload</Link>
+
+          {vm && !vm.invalidMessage && (
+            <span className="inline-flex items-center gap-2 rounded-pill border-2 border-ink bg-cream-card py-1.5 pl-1.5 pr-3 shadow-[var(--shadow-hard-sm)]">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-ink" style={{ backgroundColor: "var(--color-mustard)" }} aria-hidden="true">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="5 12 10 17 19 7" />
+                </svg>
+              </span>
+              <span className="font-mono text-[10px] font-bold uppercase tracking-[0.1em] text-ink">
+                Upload Successful — {vm.rows} rows · {vm.cols} columns
+              </span>
+            </span>
+          )}
         </div>
 
         {error ? (
           <Reveal className="mt-6">
-            <div className="card-elevated px-6 py-14 text-center" role="alert">
+            <div className="card-elevated !p-14 text-center" role="alert">
               <span className="icon-badge mx-auto" style={{ backgroundColor: "var(--color-danger)", color: "#fff" }} aria-hidden="true">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <line x1="12" y1="8" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /><circle cx="12" cy="12" r="9" />

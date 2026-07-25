@@ -23,20 +23,13 @@
   --color-mustard-hover: #e6b52f; /* yellow pill hover */
   --color-blue-accent: #a5c4e8; /* secondary badge only (e.g. "Accurate · Fast · Reliable") — not used elsewhere */
 
-  /* ---- Semantic status tokens (used by Results page scoring, badges, warnings) ---- */
-  /* All hues are muted / warm-shifted to stay within the cream/ink/mustard family. */
-  --color-success: #6b8f5a;       /* muted sage green */
-  --color-success-bg: #eef2e8;
-  --color-success-border: #c8dcc0;
-  --color-danger: #b5654a;        /* muted terracotta */
-  --color-danger-bg: #f7ede8;
-  --color-danger-border: #dfc0b4;
-  --color-warning: #c99a3a;       /* muted amber, mustard family */
-  --color-warning-bg: #faf3e0;
-  --color-warning-border: #e8d5a0;
-  --color-info: #5b7a9e;          /* muted blue-gray */
-  --color-info-bg: #eef2f6;
-  --color-info-border: #c0d0e0;
+  /* ---- Single semantic accent (Results page) ----
+     Everything "good" or "neutral" stays in ink/mustard, matching the rest
+     of the site — no green/blue/amber status soup. Red is reserved ONLY for
+     genuine problems (low quality scores, high-severity issues, load errors),
+     so it carries real signal instead of decorating half the page. */
+  --color-danger: #d1503a;
+  --color-danger-bg: #fbeae5;
 
   /* ---- Typography ---- */
   --font-display: var(--font-display-src), Georgia, "Times New Roman", serif;
@@ -52,10 +45,13 @@
   --space-section: 5rem; /* vertical gap between page sections */
 
   /* ---- Elevation ---- */
+  /* Soft shadows are kept only for rare floaty contexts (e.g. modal backdrop
+     separation). The site's real signature — used on buttons, pills, the
+     table, and now every card — is the HARD OFFSET shadow below. */
   --shadow-card: 0 1px 2px rgba(20, 20, 20, 0.04);
   --shadow-float: 0 24px 50px -12px rgba(20, 20, 20, 0.28), 0 8px 20px -8px rgba(20, 20, 20, 0.18);
 
-  /* ---- Hard offset shadow (pill / button style, matches the Field Notes ref) ---- */
+  /* ---- Hard offset shadow (pill / button style — the site's signature) ---- */
   --shadow-hard-sm: 3px 3px 0 0 var(--color-ink);
   --shadow-hard: 4px 4px 0 0 var(--color-ink);
   --shadow-hard-hover: 6px 6px 0 0 var(--color-ink);
@@ -68,22 +64,16 @@
   --shadow-hard-hover-white: 6px 6px 0 0 #ffffff;
   --shadow-hard-press-white: 1px 1px 0 0 #ffffff;
 
+  /* NOTE: no colored (mustard) shadow variant — every shadow on this site is
+     black/ink, always. "This one is special" is signaled with a bright color
+     FILL (see --color-mustard-wash + .card-accent below), never a colored
+     shadow. */
+  --color-mustard-wash: #fdf1cf;
+
   /* Yellow glow variant — for black buttons where a mustard halo adds warmth
      without obscuring the dark background. */
   --shadow-glow-yellow: 0 4px 14px rgba(244, 197, 66, 0.4);
   --shadow-glow-yellow-hover: 0 6px 20px rgba(244, 197, 66, 0.6), 0 2px 8px rgba(244, 197, 66, 0.3);
-
-
-  /* ---- Status tokens (Results page) — stay within the warm cream/ink/mustard
-     family instead of bright semantic red/green/blue ---- */
-  --color-success: #6b8f5a;
-  --color-success-bg: #eef2e8;
-  --color-danger: #b5654a;
-  --color-danger-bg: #f7ede8;
-  --color-warning: #c99a3a;
-  --color-warning-bg: #faf3e0;
-  --color-info: #5b7a9e;
-  --color-info-bg: #eef2f6;
 }
 
 @layer components {
@@ -203,31 +193,41 @@
     background-color: var(--color-mustard);
   }
 
-  /* ---- Card: one consistent surface for every card on every page ---- */
+  /* ---- Card: one consistent surface for every card on every page ----
+     Uses the site's real signature — the HARD offset shadow, same language
+     as .btn / .pill-label / .table-wrap — instead of a soft blurred shadow.
+     Interactive cards lift up-and-left on hover, same motion as buttons. */
   .card {
     background-color: var(--color-cream-card);
-    border: 1px solid var(--color-line);
+    border: 2px solid var(--color-ink);
     border-radius: var(--radius-card);
     padding: var(--space-card);
-    box-shadow: var(--shadow-card);
+    box-shadow: var(--shadow-hard-sm);
     transition:
-      transform 0.25s ease,
-      box-shadow 0.25s ease,
-      border-color 0.25s ease;
+      transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
+      box-shadow 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
 
   .card:hover {
-    transform: translateY(-4px);
-    box-shadow: var(--shadow-float);
-    border-color: var(--color-ink);
+    transform: translate(-3px, -3px);
+    box-shadow: var(--shadow-hard);
   }
 
-  /* Elevated card: same surface, floating drop shadow (e.g. the hero device mockup). */
+  /* Elevated card: same hard-shadow language, larger + static (non-interactive
+     hero panels — dataset overview, best model, quality dashboard, loading). */
   .card-elevated {
     background-color: var(--color-cream-card);
-    border: 1px solid var(--color-line);
+    border: 2px solid var(--color-ink);
     border-radius: var(--radius-card);
-    box-shadow: var(--shadow-float);
+    box-shadow: var(--shadow-hard);
+  }
+
+  /* Accent variant — "this one is special" (best-fit model, top recommendation).
+     Signals via a bright mustard-wash BACKGROUND, not a colored shadow — the
+     shadow stays black/ink exactly like every other card (inherited from .card
+     / .card-elevated; this class only ever touches background-color). */
+  .card-accent {
+    background-color: var(--color-mustard-wash);
   }
 
   /* ---- Pill label / eyebrow (mustard chip + mono uppercase tag) ---- */
@@ -261,6 +261,17 @@
     color: var(--color-ink);
   }
 
+  /* Neutral (non-mustard) pill for status/metadata chips that shouldn't compete
+     visually with the primary mustard accent (e.g. "92 rows · 15 columns"). */
+  .pill-label-ghost {
+    background-color: var(--color-cream-card);
+    color: var(--color-ink);
+  }
+
+  .pill-label-ghost:hover {
+    background-color: var(--color-cream-sunken);
+  }
+
   /* ---- Nav pill (active item in the navigation bar) ---- */
   .nav-pill {
     display: inline-flex;
@@ -284,6 +295,103 @@
     background-color: var(--color-mustard-hover);
     transform: translate(-1px, -1px);
     box-shadow: var(--shadow-hard);
+  }
+
+  /* ---- Section-header eyebrow pill: a real button-style pill (hard shadow +
+     up-left hover lift + press-down active state) instead of static mono
+     text, so section headers on data-heavy pages (Results) carry the same
+     tactile animation language as every other interactive element. ---- */
+  .eyebrow-pill {
+    display: inline-flex;
+    align-items: center;
+    cursor: default;
+    border-radius: var(--radius-pill);
+    border: 2px solid var(--color-ink);
+    background-color: var(--color-cream-card);
+    padding: 0.4rem 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-ink);
+    box-shadow: var(--shadow-hard-sm);
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.2s ease;
+  }
+
+  .eyebrow-pill:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: var(--shadow-hard);
+    background-color: var(--color-mustard);
+  }
+
+  .eyebrow-pill:active {
+    transform: translate(1px, 1px);
+    box-shadow: var(--shadow-hard-press);
+  }
+
+  /* ---- Section heading, BUTTON format ----
+     Per explicit request: side/section headings ("Executive Summary", "Data
+     Quality Dashboard", "Why Not Other Models", etc.) render as an actual
+     button — not a small label sitting above plain text. Bright mustard fill
+     by default (not just on hover), mono font (matching every other button
+     on the site, not the serif display font), and the exact same animation
+     contract as .btn: lift up-left + shadow grows on hover, presses down on
+     click. Shadow is ALWAYS black/ink — color comes from the fill, never
+     from the shadow. */
+  .section-heading-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    border-radius: var(--radius-pill);
+    border: 2px solid var(--color-ink);
+    background-color: var(--color-mustard);
+    color: var(--color-ink);
+    padding: 0.7rem 1.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    line-height: 1;
+    box-shadow: var(--shadow-hard);
+    transition:
+      background-color 0.18s ease,
+      transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
+      box-shadow 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  .section-heading-btn:hover {
+    background-color: var(--color-mustard-hover);
+    transform: translate(-2px, -2px);
+    box-shadow: var(--shadow-hard-hover);
+  }
+
+  .section-heading-btn:active {
+    transform: translate(1px, 1px);
+    box-shadow: var(--shadow-hard-press);
+  }
+
+  .section-heading-btn svg {
+    flex-shrink: 0;
+  }
+
+  /* Small bordered icon slot used inside model-comparison cards and the
+     best-model panel (algorithm-type SVGs) — same border/shadow language as
+     .icon-badge but compact, sitting inline next to text instead of centered
+     as a standalone circle. */
+  .icon-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: var(--radius-pill);
+    border: 2px solid var(--color-ink);
+    background-color: var(--color-cream-card);
+    box-shadow: var(--shadow-hard-sm);
+    color: var(--color-ink);
+    flex-shrink: 0;
   }
 
   /* ---- Small mono uppercase label (nav links, table headers, captions) ---- */
@@ -374,10 +482,23 @@
     letter-spacing: -0.01em;
     color: var(--color-ink);
   }
+
+  /* ---- Section header pattern: mono eyebrow + big serif heading, the same
+     rhythm as Home's "How It Works" / "See It In Action" sections. Used by
+     the Results page so it reads as one continuous site instead of the old
+     small corner-label headings. ---- */
+  .section-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
 }
 
 /* ============================================================
-   Animation utilities — used by app/page.tsx for scroll reveals
+   Animation utilities — used across pages for scroll reveals
    and ambient motion. Kept global (not @layer components) so
    they can freely compose with Tailwind utility classes.
    ============================================================ */
@@ -517,7 +638,7 @@
   }
 }
 
-/* Grid backdrop for the whole homepage — fixed to the viewport (subtle parallax as
+/* Grid backdrop for the whole site — fixed to the viewport (subtle parallax as
    the page scrolls over it), fades out at the very top/bottom via mask, drifts slowly
    so the page feels alive without being distracting.
    NOTE: lines use rgba(ink) directly, not --color-line — --color-line (#e6e0d4) is
