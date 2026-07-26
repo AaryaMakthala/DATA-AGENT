@@ -21,7 +21,7 @@ def test_charts_generated_and_exist_on_disk(write_csv, classification_df):
     # Drop the identifier so charts are meaningful (mirrors the cleaned frame).
     df = classification_df.drop(columns=["Customer_ID"]).fillna(0)
     path = write_csv(df, "charts")
-    charts = generate_charts(path, "viztest")
+    charts = generate_charts(path, "viztest", "testdata")
 
     assert len(charts) >= 1
     for meta in charts:
@@ -37,7 +37,7 @@ def test_charts_generated_and_exist_on_disk(write_csv, classification_df):
 def test_numeric_only_frame_produces_charts(write_csv, regression_df):
     """An all-numeric frame still yields histograms/heatmap without error."""
     path = write_csv(regression_df, "numviz")
-    charts = generate_charts(path, "numviztest")
+    charts = generate_charts(path, "numviztest", "testdata")
     assert len(charts) >= 1
     for meta in charts:
         assert isinstance(meta, dict)
@@ -48,12 +48,12 @@ def test_numeric_only_frame_produces_charts(write_csv, regression_df):
 def test_unreadable_csv_raises(tmp_path):
     """A missing file surfaces as VisualizerError, not a bare crash."""
     with pytest.raises(VisualizerError):
-        generate_charts(str(tmp_path / "nope.csv"), "missing")
+        generate_charts(str(tmp_path / "nope.csv"), "missing", "testdata")
 
 
 def test_single_column_frame_does_not_crash(write_csv):
     """A degenerate one-column frame produces charts (or none) without raising."""
     df = pd.DataFrame({"only": np.arange(30, dtype=float)})
     path = write_csv(df, "single")
-    paths = generate_charts(path, "singlecol")  # must not raise
+    paths = generate_charts(path, "singlecol", "testdata")  # must not raise
     assert isinstance(paths, list)

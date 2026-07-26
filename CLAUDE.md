@@ -78,7 +78,12 @@ POST /analyze/{file_id} -> runs the LangGraph, writes report JSON to disk
 GET  /results/{file_id} -> reads report JSON, enriches it, returns dashboard contract
 GET  /download/{file_id}         -> cleaned CSV attachment       (routes.py:319)
 GET  /download/json/{file_id}    -> report JSON as attachment    (routes.py:333)
-GET  /download/charts/{file_id}  -> zip of this run's PNG charts (routes.py:359)
+GET  /download/charts/{file_id}  -> zip of this run's PNG charts (routes.py:359).
+     Chart files are resolved via file_service.resolve_chart_paths(), which reads
+     the report JSON's `charts` manifest (charts are named from the ORIGINAL upload
+     name by build_artifact_filename and may contain no file_id at all, so no glob
+     can find them; legacy `{file_id}_*.png` glob kept as fallback for pre-manifest
+     runs). Fixed 2026-07-26; regression-tested in tests/test_download_charts.py.
 ```
 
 ### 4a. The LangGraph (`agents/graph.py`, state in `agents/state.py`)

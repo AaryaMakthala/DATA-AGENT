@@ -121,7 +121,7 @@
   .btn-black {
     background-color: var(--color-ink);
     color: #ffffff;
-    border-color: var(--color-mustard);
+    border-color: var(--color-ink);
     box-shadow: var(--shadow-hard-yellow);
   }
 
@@ -155,6 +155,26 @@
 
   .btn-ghost:hover {
     background-color: var(--color-cream-sunken);
+  }
+
+  /* ---- Ghost button variant for dark ink panels (e.g. closing CTA
+     sections). Transparent fill, mustard outline, yellow hard-shadow —
+     so the button is actually visible against a black background instead
+     of inheriting the default black border + black shadow. ---- */
+  .btn-ghost-dark {
+    background-color: transparent;
+    color: #ffffff;
+    border-color: var(--color-ink);
+    box-shadow: var(--shadow-hard-yellow);
+  }
+
+  .btn-ghost-dark:hover {
+    background-color: rgba(244, 197, 66, 0.12);
+    box-shadow: var(--shadow-hard-hover-yellow);
+  }
+
+  .btn-ghost-dark:active {
+    box-shadow: var(--shadow-hard-press-yellow);
   }
 
   .btn-lg {

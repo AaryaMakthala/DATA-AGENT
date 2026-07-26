@@ -74,7 +74,7 @@ def test_bug3_duplicate_invariant_holds_when_strategy_is_drop(tmp_path=None):
         "encoding": {},
     }
     output_path, applied_plan, viz_path = clean_csv(
-        csv_path, cleaning_plan, file_id="bug3_drop_case",
+        csv_path, cleaning_plan, file_id="bug3_drop_case", original_filename="testdata",
         target_column="Target", identifier_columns=["ID"],
     )
     result = pd.read_csv(output_path)
@@ -108,7 +108,7 @@ def test_bug3_duplicate_invariant_holds_when_strategy_is_keep(tmp_path=None):
         "encoding": {},
     }
     output_path, applied_plan, viz_path = clean_csv(
-        csv_path, cleaning_plan, file_id="bug3_keep_case",
+        csv_path, cleaning_plan, file_id="bug3_keep_case", original_filename="testdata",
         target_column="Target", identifier_columns=["ID"],
     )
     result = pd.read_csv(output_path)
@@ -204,7 +204,7 @@ def test_high_missingness_drop_converts_to_column_drop(tmp_path=None):
         "encoding": {},
     }
     output_path, applied_plan, _ = clean_csv(
-        csv_path, cleaning_plan, file_id="highmiss_case",
+        csv_path, cleaning_plan, file_id="highmiss_case", original_filename="testdata",
         target_column="Target", identifier_columns=["ID"],
     )
     result = pd.read_csv(output_path)
@@ -241,7 +241,7 @@ def test_low_missingness_drop_still_drops_rows(tmp_path=None):
         "encoding": {},
     }
     output_path, applied_plan, _ = clean_csv(
-        csv_path, cleaning_plan, file_id="lowmiss_case",
+        csv_path, cleaning_plan, file_id="lowmiss_case", original_filename="testdata",
         target_column="Target", identifier_columns=["ID"],
     )
     result = pd.read_csv(output_path)

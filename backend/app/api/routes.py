@@ -21,6 +21,7 @@ from app.services.file_service import (
     InvalidFileIdError,
     UploadTooLargeError,
     chart_path_to_url,
+    resolve_chart_paths,
     resolve_cleaned_file_path,
     resolve_original_filename,
     resolve_report_path,
@@ -56,9 +57,8 @@ def _require_valid_file_id(file_id: str) -> None:
     """Reject path-traversal / unsafe file_id at the route boundary (HTTP 400).
 
     The resolvers in file_service also validate defensively, but doing it here
-    means /download/charts (which globs the charts folder directly and never
-    calls a resolver) is covered too, and every rejection is a clean 400 rather
-    than a resolver error mapped to 404/500.
+    means every rejection is a clean 400 rather than a resolver error mapped
+    to 404/500.
     """
     try:
         validate_file_id(file_id)
@@ -520,17 +520,25 @@ async def download_analysis_report(file_id: str) -> StreamingResponse:
 async def download_charts_zip(file_id: str) -> StreamingResponse:
     """Zip every generated chart for this file_id and return it as a download.
 
-    Charts live in `Config.CHARTS_FOLDER`, named `{file_id}_<kind>_<...>.png`
-    by visualizer.py (e.g. `{file_id}_bar_Sex.png`,
-    `{file_id}_correlation_heatmap.png`) -- globbing on that prefix is the
-    same convention `_chart_path_to_url` above already relies on the
-    filename (not the full path) for, so this stays consistent with how
-    chart files are located everywhere else in the app.
+    Chart files are resolved through `file_service.resolve_chart_paths`,
+    which reads the report JSON's `charts` manifest -- the ONLY reliable
+    record of which PNGs belong to this run. The old implementation globbed
+    `{file_id}_*.png`, but `build_artifact_filename` names charts from the
+    ORIGINAL upload name (e.g. `Titanic-Dataset_bar_chart_Sex.png`) and only
+    appends a file_id fragment on a collision, so the glob matched nothing
+    and every request 404'd even though the charts existed and rendered fine
+    via `/charts/`.
     """
     _require_valid_file_id(file_id)
 
-    chart_paths = sorted(Config.CHARTS_FOLDER.glob(f"{file_id}_*.png"))
+    logger.info("download_charts_zip: request for file_id=%s", file_id)
+
+    chart_paths = resolve_chart_paths(file_id)
     if not chart_paths:
+        logger.info(
+            "download_charts_zip: no charts resolved for file_id=%s -> 404",
+            file_id,
+        )
         raise APIError(
             404,
             "NOT_FOUND",
@@ -540,14 +548,19 @@ async def download_charts_zip(file_id: str) -> StreamingResponse:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in chart_paths:
-            # Strip the "{file_id}_" prefix so the user sees clean names inside
-            # the archive (e.g. "bar_chart_Country.png") while the on-disk file
-            # retains the full collision-safe name (e.g.
-            # "2099407f_bar_chart_Country.png") -- arcname only affects what the
-            # ZIP entry is called, not which file is read from disk.
-            arcname = path.name.removeprefix(f"{file_id}_")
-            archive.write(path, arcname=arcname)
+            # arcname = the on-disk basename, which is already human-readable
+            # (built from the original upload name by build_artifact_filename).
+            archive.write(path, arcname=path.name)
+    zip_size = buffer.tell()
     buffer.seek(0)
+
+    logger.info(
+        "download_charts_zip: built in-memory zip for file_id=%s "
+        "(charts=%d, size=%d bytes)",
+        file_id,
+        len(chart_paths),
+        zip_size,
+    )
 
     return StreamingResponse(
         buffer,

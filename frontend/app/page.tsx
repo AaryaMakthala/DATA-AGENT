@@ -478,7 +478,7 @@ export default function Home() {
               <Link href="/upload" className="btn btn-yellow btn-shadow-white">
                 Upload Data <ArrowIcon />
               </Link>
-              <Link href="/results" className="btn btn-ghost" style={{ backgroundColor: "transparent", color: "#fff" }}>
+              <Link href="/results" className="btn btn-ghost-dark">
                 Explore Analysis <ArrowIcon />
               </Link>
             </div>

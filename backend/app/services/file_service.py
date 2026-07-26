@@ -4,6 +4,7 @@ Filesystem utilities for uploaded datasets and generated analysis artifacts.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 import uuid
@@ -295,6 +296,93 @@ def chart_path_to_url(path: str) -> str:
     file).
     """
     return f"/charts/{Path(path).name}"
+
+
+def resolve_chart_paths(file_id: str) -> list[Path]:
+    """Resolve every chart PNG generated for a run, from the stored report.
+
+    The AUTHORITATIVE source is the report JSON's `charts` manifest
+    (written by /analyze from `visualizer.generate_charts`'s return value):
+    chart filenames are built by `build_artifact_filename` from the ORIGINAL
+    upload name (e.g. `Titanic-Dataset_bar_chart_Sex.png`) and only gain a
+    `_{file_id[:6]}` fragment on a name collision -- so a filename may
+    contain NO trace of the file_id at all, and no glob on the charts folder
+    can reliably recover "which PNGs belong to this run". Only the manifest
+    knows.
+
+    Each manifest entry is re-anchored to `Config.CHARTS_FOLDER` by basename
+    (never trusting the stored absolute path -- robust against the outputs
+    dir moving, and keeps resolution inside the charts folder). Entries whose
+    file has since been deleted (e.g. by `purge_expired_artifacts`) are
+    skipped with a warning.
+
+    Falls back to the legacy `{file_id}_*.png` glob for reports written
+    before the manifest carried metadata dicts. Returns [] when nothing can
+    be resolved; never raises for a missing/corrupt report.
+    """
+    validate_file_id(file_id)
+
+    report_path = Config.REPORTS_FOLDER / f"{file_id}.json"
+    charts_manifest: list = []
+    if report_path.is_file():
+        try:
+            data = json.loads(report_path.read_text(encoding="utf-8"))
+            charts_manifest = data.get("charts") or []
+        except (json.JSONDecodeError, OSError):
+            logger.warning(
+                "resolve_chart_paths: report unreadable for file_id=%s; "
+                "falling back to legacy glob",
+                file_id,
+            )
+    else:
+        logger.warning(
+            "resolve_chart_paths: no report manifest for file_id=%s; "
+            "falling back to legacy glob",
+            file_id,
+        )
+
+    resolved: list[Path] = []
+    seen: set[str] = set()
+    missing: list[str] = []
+    for item in charts_manifest:
+        # Current shape: metadata dict with a `path` key; legacy shape: bare
+        # path string (same tolerance as routes._charts_to_urls).
+        raw = item.get("path") if isinstance(item, dict) else item
+        if not raw or not isinstance(raw, str):
+            continue
+        name = Path(raw).name
+        if name in seen:
+            continue
+        seen.add(name)
+        candidate = Config.CHARTS_FOLDER / name
+        if candidate.is_file():
+            resolved.append(candidate)
+        else:
+            missing.append(name)
+
+    if missing:
+        logger.warning(
+            "resolve_chart_paths: %d chart(s) in manifest missing on disk "
+            "for file_id=%s: %s",
+            len(missing),
+            file_id,
+            missing,
+        )
+
+    if resolved:
+        return resolved
+
+    # Legacy fallback: charts written before build_artifact_filename existed
+    # were named `{file_id}_<kind>.png`.
+    legacy = sorted(Config.CHARTS_FOLDER.glob(f"{file_id}_*.png"))
+    if legacy:
+        logger.info(
+            "resolve_chart_paths: resolved %d chart(s) via legacy "
+            "{file_id}_ glob for file_id=%s",
+            len(legacy),
+            file_id,
+        )
+    return legacy
 
 
 def purge_expired_artifacts() -> int:

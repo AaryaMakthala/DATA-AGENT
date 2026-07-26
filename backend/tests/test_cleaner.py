@@ -38,7 +38,7 @@ def test_target_never_stripped_by_outlier_removal(write_csv):
     path = write_csv(df, "binary")
     plan = {"outliers": {"Target": "remove"}, "duplicates": "keep"}
 
-    cleaned_path, applied, _viz = clean_csv(path, plan, "t1", target_column="Target")
+    cleaned_path, applied, _viz = clean_csv(path, plan, "t1", "testdata", target_column="Target")
     res = pd.read_csv(cleaned_path)
 
     assert res["Target"].nunique() == 2
@@ -49,7 +49,7 @@ def test_identifier_columns_dropped(write_csv, classification_df):
     """Identifier columns are removed and recorded in the applied plan."""
     path = write_csv(classification_df, "ids")
     cleaned_path, applied, _viz = clean_csv(
-        path, _flat_plan(), "t2", target_column="churn",
+        path, _flat_plan(), "t2", "testdata", target_column="churn",
         identifier_columns=["Customer_ID"],
     )
     res = pd.read_csv(cleaned_path)
@@ -62,7 +62,7 @@ def test_missing_indicator_and_imputation(write_csv, classification_df):
     """Missing numeric cells get a `_missing` indicator and are median-imputed."""
     path = write_csv(classification_df, "impute")
     cleaned_path, _applied, _viz = clean_csv(
-        path, _flat_plan(), "t3", target_column="churn",
+        path, _flat_plan(), "t3", "testdata", target_column="churn",
         identifier_columns=["Customer_ID"],
     )
     res = pd.read_csv(cleaned_path)
@@ -75,7 +75,7 @@ def test_one_hot_encoding_applied(write_csv, classification_df):
     """A low-cardinality categorical column is one-hot encoded."""
     path = write_csv(classification_df, "onehot")
     cleaned_path, _applied, _viz = clean_csv(
-        path, _flat_plan(), "t4", target_column="churn",
+        path, _flat_plan(), "t4", "testdata", target_column="churn",
         identifier_columns=["Customer_ID"],
     )
     res = pd.read_csv(cleaned_path)
@@ -97,7 +97,7 @@ def test_high_cardinality_not_encoded(write_csv):
     path = write_csv(df, "highcard")
     plan = {"encoding": {"free_text": "one_hot"}, "duplicates": "keep"}
 
-    cleaned_path, _applied, _viz = clean_csv(path, plan, "t5", target_column="y")
+    cleaned_path, _applied, _viz = clean_csv(path, plan, "t5", "testdata", target_column="y")
     res = pd.read_csv(cleaned_path)
 
     # No explosion into 200 dummy columns.
@@ -111,7 +111,7 @@ def test_duplicates_dropped(write_csv):
     path = write_csv(df, "dups")
     plan = {"duplicates": "drop"}
 
-    cleaned_path, _applied, _viz = clean_csv(path, plan, "t6", target_column="y")
+    cleaned_path, _applied, _viz = clean_csv(path, plan, "t6", "testdata", target_column="y")
     res = pd.read_csv(cleaned_path)
     assert len(res) == 3
 
@@ -130,7 +130,7 @@ def test_target_leakage_flagged(write_csv):
     path = write_csv(df, "leak")
     plan = {"duplicates": "keep"}
 
-    cleaned_path, applied, _viz = clean_csv(path, plan, "t7", target_column="price")
+    cleaned_path, applied, _viz = clean_csv(path, plan, "t7", "testdata", target_column="price")
     res = pd.read_csv(cleaned_path)
 
     assert "leakage_warnings" in applied
@@ -154,7 +154,7 @@ def test_enriched_dict_plan_executes(write_csv, classification_df):
         "notes": "enriched",
     }
     cleaned_path, _applied, _viz = clean_csv(
-        path, plan, "t8", target_column="churn",
+        path, plan, "t8", "testdata", target_column="churn",
         identifier_columns=["Customer_ID"],
     )
     res = pd.read_csv(cleaned_path)
@@ -168,7 +168,7 @@ def test_malformed_plan_skips_cleaning(write_csv, classification_df):
     """A raw_plan fallback (LLM returned non-JSON) doesn't crash -- steps are skipped."""
     path = write_csv(classification_df, "raw")
     cleaned_path, _applied, _viz = clean_csv(
-        path, {"raw_plan": "the model said something unparseable"}, "t9",
+        path, {"raw_plan": "the model said something unparseable"}, "t9", "testdata",
         target_column="churn",
     )
     res = pd.read_csv(cleaned_path)
