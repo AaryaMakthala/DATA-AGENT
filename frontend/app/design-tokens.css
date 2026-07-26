@@ -21,6 +21,10 @@
  *
  * Until that's wired up, --font-headline falls back to a clean system sans,
  * so nothing breaks — it'll just look even better once the real font loads.
+ *
+ * NEW: --font-logo (Oswald) was added ONLY for the "DATA AGENT" wordmark in
+ * the nav. Wired up via app/layout.tsx (see fontLogo there) and applied with
+ * the .font-logo utility class below.
  */
 
 @theme {
@@ -43,6 +47,7 @@
   --font-body: var(--font-body-src), system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-mono-src), ui-monospace, "SFMono-Regular", monospace;
   --font-headline: var(--font-headline-src), "Helvetica Neue", Arial, sans-serif;
+  --font-logo: var(--font-logo-src), "Helvetica Neue", Arial, sans-serif;
 
   --radius-card: 16px;
   --radius-pill: 9999px;
@@ -564,6 +569,13 @@
     line-height: 1.03;
     letter-spacing: -0.025em;
     color: var(--color-ink);
+  }
+
+  /* ---- Logo wordmark ----
+     Used ONLY for the "DATA AGENT" text in the nav (SiteNav in the shared
+     UI file). Powered by --font-logo (Oswald, wired up in app/layout.tsx). */
+  .font-logo {
+    font-family: var(--font-logo);
   }
 
   .section-eyebrow {

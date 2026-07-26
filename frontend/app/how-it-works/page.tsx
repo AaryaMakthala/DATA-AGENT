@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 import { SiteNav, SiteFooter, ArrowIcon } from "@/components/SiteNav";
 

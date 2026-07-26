@@ -1,7 +1,6 @@
+import Image from "next/image";
 import Link from "next/link";
-
-/** Shared UI atoms used across pages (icons, nav, footer). Keeps every page visually
- * consistent and pulling from the same source, per the design-token rules. */
+import logo from "@/app/favicon.png";
 
 export function ArrowIcon({ className }: { className?: string }) {
   return (
@@ -36,21 +35,23 @@ const NAV_LINKS = [
   { label: "About", href: "/about" },
 ];
 
-/** Top navigation bar, identical on every page. `active` picks which link
- * renders as the black pill. Inactive links use `.nav-link`, which stays
- * invisible until hover, then reveals a real bordered/hard-shadow button
- * shape — matching the active pill's visual language instead of just
- * changing text color. */
 export function SiteNav({ active }: { active?: string }) {
   return (
     <header className="flex items-center justify-between border-b border-line py-5">
       <Link href="/" className="flex items-center gap-3">
-        <span className="flex h-9 w-9 items-center justify-center rounded-md bg-ink text-xs font-bold text-white">
-          DA
-        </span>
+        <Image
+          src={logo}
+          alt="Data Agent logo"
+          width={36}
+          height={36}
+          priority
+          className="h-8 w-8 shrink-0 rounded-full object-cover sm:h-9 sm:w-9"
+        />
         <div className="leading-tight">
-          <div className="font-display text-sm font-bold text-ink">DATA AGENT</div>
-          <div className="label-mono text-[8px] leading-tight">
+          <div className="font-logo text-sm font-bold tracking-[0.14em] text-ink uppercase">
+            DATA AGENT
+          </div>
+          <div className="label-mono text-[8px] leading-tight tracking-wide">
             Your Personal Data Analyst
             <br />
             and Data Cleaner
@@ -79,8 +80,6 @@ export function SiteNav({ active }: { active?: string }) {
   );
 }
 
-/* ---- Social / contact icon components (footer use only) ---- */
-
 function LinkedInIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -108,16 +107,69 @@ function EmailIcon() {
   );
 }
 
-/** Portfolio footer — dark-themed, consistent with the site's ink background.
- *  Includes copyright and three icon+text links: LinkedIn, GitHub, Email. */
-export function SiteFooter() {
+function FooterLink({
+  href,
+  label,
+  icon,
+  external,
+}: {
+  href: string;
+  label: string;
+  icon: React.ReactNode;
+  external: boolean;
+}) {
+  const externalProps = external
+    ? { target: "_blank", rel: "noopener noreferrer" }
+    : {};
+
+  const linkStyle: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "0.45rem",
+    padding: "0.5rem 0.85rem",
+    borderRadius: "9999px",
+    fontFamily: "var(--font-mono)",
+    fontSize: "0.62rem",
+    fontWeight: 600,
+    letterSpacing: "0.1em",
+    textTransform: "uppercase",
+    color: "rgba(255,255,255,0.55)",
+    textDecoration: "none",
+    border: "1px solid rgba(255,255,255,0.1)",
+    transition: "color 0.18s ease, border-color 0.18s ease, background-color 0.18s ease",
+  };
+
+  function handleEnter(e: React.MouseEvent<HTMLAnchorElement>) {
+    const el = e.currentTarget;
+    el.style.color = "var(--color-mustard)";
+    el.style.borderColor = "rgba(244,197,66,0.4)";
+    el.style.backgroundColor = "rgba(244,197,66,0.08)";
+  }
+
+  function handleLeave(e: React.MouseEvent<HTMLAnchorElement>) {
+    const el = e.currentTarget;
+    el.style.color = "rgba(255,255,255,0.55)";
+    el.style.borderColor = "rgba(255,255,255,0.1)";
+    el.style.backgroundColor = "transparent";
+  }
+
   return (
-    <footer
-      style={{
-        backgroundColor: "var(--color-ink)",
-        borderTop: "2px solid var(--color-ink)",
-      }}
-    >
+    <a href={href} aria-label={label} style={linkStyle} onMouseEnter={handleEnter} onMouseLeave={handleLeave} {...externalProps}>
+      {icon}
+      {label}
+    </a>
+  );
+}
+
+export function SiteFooter() {
+  const links = [
+    { href: "https://www.linkedin.com/in/aaryamakthala", label: "LinkedIn", icon: <LinkedInIcon />, external: true },
+    { href: "https://github.com/AaryaMakthala", label: "GitHub", icon: <GitHubIcon />, external: true },
+    { href: "mailto:aaryamakthala@gmail.com", label: "Email", icon: <EmailIcon />, external: false },
+  ];
+
+  return (
+    <footer style={{ backgroundColor: "var(--color-ink)", borderTop: "2px solid var(--color-ink)" }}>
       <div
         style={{
           maxWidth: "72rem",
@@ -130,7 +182,6 @@ export function SiteFooter() {
           gap: "1.25rem",
         }}
       >
-        {/* Copyright */}
         <p
           style={{
             fontFamily: "var(--font-mono)",
@@ -145,68 +196,9 @@ export function SiteFooter() {
           © 2026 Makthala Aarya. All rights reserved.
         </p>
 
-        {/* Social links */}
-        <nav
-          aria-label="Social links"
-          style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}
-        >
-          {[
-            {
-              href: "https://www.linkedin.com/in/aaryamakthala",
-              label: "LinkedIn",
-              icon: <LinkedInIcon />,
-              external: true,
-            },
-            {
-              href: "https://github.com/AaryaMakthala",
-              label: "GitHub",
-              icon: <GitHubIcon />,
-              external: true,
-            },
-            {
-              href: "mailto:aaryamakthala@gmail.com",
-              label: "Email",
-              icon: <EmailIcon />,
-              external: false,
-            },
-          ].map(({ href, label, icon, external }) => (
-            <a
-              key={label}
-              href={href}
-              aria-label={label}
-              {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.45rem",
-                padding: "0.5rem 0.85rem",
-                borderRadius: "9999px",
-                fontFamily: "var(--font-mono)",
-                fontSize: "0.62rem",
-                fontWeight: 600,
-                letterSpacing: "0.1em",
-                textTransform: "uppercase" as const,
-                color: "rgba(255,255,255,0.55)",
-                textDecoration: "none",
-                border: "1px solid rgba(255,255,255,0.1)",
-                transition: "color 0.18s ease, border-color 0.18s ease, background-color 0.18s ease",
-              }}
-              onMouseEnter={(e) => {
-                const el = e.currentTarget;
-                el.style.color = "var(--color-mustard)";
-                el.style.borderColor = "rgba(244,197,66,0.4)";
-                el.style.backgroundColor = "rgba(244,197,66,0.08)";
-              }}
-              onMouseLeave={(e) => {
-                const el = e.currentTarget;
-                el.style.color = "rgba(255,255,255,0.55)";
-                el.style.borderColor = "rgba(255,255,255,0.1)";
-                el.style.backgroundColor = "transparent";
-              }}
-            >
-              {icon}
-              {label}
-            </a>
+        <nav aria-label="Social links" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+          {links.map((link) => (
+            <FooterLink key={link.label} href={link.href} label={link.label} icon={link.icon} external={link.external} />
           ))}
         </nav>
       </div>
