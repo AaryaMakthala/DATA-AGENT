@@ -17,8 +17,8 @@ type Stage = "idle" | "uploading" | "analyzing" | "error";
 // ---------------------------------------------------------------------------
 const HIGHLIGHTS = [
   {
-    title: "Secure & Private",
-    body: "Your data is encrypted and never shared.",
+    title: "Secure & private",
+    body: "Your data is encrypted in transit and never shared.",
     icon: (
       <>
         <path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6l7-3z" />
@@ -27,13 +27,13 @@ const HIGHLIGHTS = [
     ),
   },
   {
-    title: "Fast & Accurate",
-    body: "Get quick, reliable analysis and results.",
+    title: "Fast & accurate",
+    body: "Reliable results, ready in under a minute.",
     icon: <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />,
   },
   {
-    title: "Actionable Insights",
-    body: "Turn your data into clear decisions.",
+    title: "Actionable insights",
+    body: "Clear recommendations, not just raw numbers.",
     icon: (
       <>
         <circle cx="12" cy="12" r="8" />
@@ -48,7 +48,7 @@ const STEPS = [
   {
     num: "1",
     title: "Upload CSV",
-    body: "Upload your dataset in .csv format.",
+    body: "Drop in your dataset in .csv format.",
     icon: (
       <>
         <path d="M12 15V4" />
@@ -59,8 +59,8 @@ const STEPS = [
   },
   {
     num: "2",
-    title: "We Analyze",
-    body: "Our AI analyzes your data and finds the best model.",
+    title: "We analyze",
+    body: "Our AI scans and finds the best-fit model.",
     icon: (
       <>
         <circle cx="11" cy="11" r="7" />
@@ -70,8 +70,8 @@ const STEPS = [
   },
   {
     num: "3",
-    title: "Get Results",
-    body: "Explore insights, graphs, and download results.",
+    title: "Get results",
+    body: "Explore insights and visualizations.",
     icon: (
       <>
         <path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7l-4-4z" />
@@ -82,7 +82,7 @@ const STEPS = [
   {
     num: "4",
     title: "Download",
-    body: "Download the updated CSV file with insights.",
+    body: "Take your enriched CSV with you.",
     icon: (
       <>
         <path d="M12 4v11" />
@@ -168,8 +168,16 @@ function CloseIcon({ size = 14 }: { size?: number }) {
   );
 }
 
+function SparkIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg {...svgProps} width={size} height={size} strokeWidth={1.6}>
+      <path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18" />
+    </svg>
+  );
+}
+
 // ---------------------------------------------------------------------------
-// Reveal — identical to Home & Features (IntersectionObserver + .reveal class)
+// Reveal
 // ---------------------------------------------------------------------------
 function Reveal({
   children,
@@ -206,14 +214,12 @@ function Reveal({
 }
 
 // ---------------------------------------------------------------------------
-// Analyzing panel — spinning ring + a processing timeline of the real stages
+// Analyzing state — fills the panel while a file is processed
 // ---------------------------------------------------------------------------
-function AnalyzingPanel({ fileName }: { fileName?: string }) {
+function AnalyzingState({ fileName }: { fileName?: string }) {
   const [stepIdx, setStepIdx] = useState(0);
   const [elapsed, setElapsed] = useState(0);
-  const ref = useRef<HTMLDivElement>(null);
 
-  // Advance the timeline, holding on the final step until the API resolves.
   useEffect(() => {
     const id = setInterval(() => {
       setStepIdx((prev) => Math.min(prev + 1, ANALYZING_STEPS.length - 1));
@@ -226,30 +232,14 @@ function AnalyzingPanel({ fileName }: { fileName?: string }) {
     return () => clearInterval(id);
   }, []);
 
-  // Trigger reveal immediately on mount
-  useEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-    // Small RAF so the transition actually fires
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => node.classList.add("is-visible"));
-    });
-  }, []);
-
   const isLastStep = stepIdx === ANALYZING_STEPS.length - 1;
 
   return (
-    <div
-      ref={ref}
-      className="reveal flex flex-col items-center gap-7 py-6 sm:py-10"
-      role="status"
-      aria-live="polite"
-    >
-      {/* Spinning donut ring with a pulsing AI core */}
+    <div className="flex flex-col items-center gap-7 py-2" role="status" aria-live="polite">
       <div className="relative flex h-24 w-24 items-center justify-center">
         <span
           aria-hidden="true"
-          className="absolute inset-0 rounded-full border-2 border-ink bg-cream-card"
+          className="absolute inset-0 rounded-full border-2 border-ink bg-cream"
           style={{ boxShadow: "var(--shadow-hard-sm)" }}
         />
         <svg
@@ -271,22 +261,20 @@ function AnalyzingPanel({ fileName }: { fileName?: string }) {
             transform="rotate(-90 18 18)"
           />
         </svg>
-        {/* Inner pulsing mustard core */}
         <span className="relative z-10 flex h-9 w-9 items-center justify-center rounded-full border-2 border-ink bg-mustard animate-pulse-soft">
           <span className="h-2 w-2 rounded-full bg-ink" />
         </span>
       </div>
 
       <div className="text-center">
-        <h2 className="display-heading text-2xl sm:text-3xl">Analyzing your data</h2>
+        <h2 className="headline text-2xl sm:text-3xl">Analyzing your data</h2>
         {fileName && (
-          <p className="mt-2 truncate px-4 text-sm text-muted" title={fileName}>
+          <p className="font-mono mt-2 truncate px-4 text-xs tracking-wide text-muted" title={fileName}>
             {fileName}
           </p>
         )}
       </div>
 
-      {/* Processing timeline — each stage checks off as it completes */}
       <ol className="mx-auto w-full max-w-sm space-y-3 text-left">
         {ANALYZING_STEPS.map((step, i) => {
           const done = i < stepIdx;
@@ -310,7 +298,7 @@ function AnalyzingPanel({ fileName }: { fileName?: string }) {
               </span>
               <span
                 className={[
-                  "text-sm transition-colors duration-300",
+                  "font-body text-sm transition-colors duration-300",
                   active ? "font-bold text-ink" : done ? "text-ink" : "text-muted",
                 ].join(" ")}
               >
@@ -325,6 +313,40 @@ function AnalyzingPanel({ fileName }: { fileName?: string }) {
       <div className="label-mono text-[10px]">
         {isLastStep ? "Almost done" : "Est. under a minute"} · {elapsed}s elapsed
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Error state — replaces the dropzone in the SAME panel, never stacks on it
+// ---------------------------------------------------------------------------
+function ErrorState({
+  message,
+  fileName,
+  onRetry,
+}: {
+  message: string;
+  fileName?: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-5 py-2 text-center">
+      <span className="icon-badge icon-badge-danger h-16 w-16">
+        <WarningIcon size={28} />
+      </span>
+      <div>
+        <h2 className="headline text-2xl sm:text-3xl">Upload failed</h2>
+        {fileName && (
+          <p className="font-mono mt-2 text-xs tracking-wide text-muted">{fileName}</p>
+        )}
+        <p className="font-body mx-auto mt-3 max-w-sm text-sm leading-snug text-muted">
+          {message}
+        </p>
+      </div>
+      <button type="button" className="btn btn-black" onClick={onRetry}>
+        <CloudUploadIcon size={16} />
+        Try a different file
+      </button>
     </div>
   );
 }
@@ -353,6 +375,7 @@ export default function UploadPage() {
   const runUploadAndAnalyze = async (file: File) => {
     const validationError = validate(file);
     if (validationError) {
+      setSelectedFile(file);
       setError(validationError);
       setStage("error");
       return;
@@ -387,23 +410,17 @@ export default function UploadPage() {
     setError(null);
     setSelectedFile(null);
     setUploadProgress(null);
+    if (inputRef.current) inputRef.current.value = "";
   };
 
-  // The upload itself has finished the moment progress hits 100; the analyze
-  // call is what keeps us on "uploading" for a beat longer.
   const isUploadComplete = stage === "uploading" && uploadProgress === 100;
+  const isIdleOrUploading = stage === "idle" || stage === "uploading";
 
   return (
     <div className="relative min-h-screen bg-cream">
-      {/* Same fixed grid background as Home & Features */}
       <div aria-hidden="true" className="pointer-events-none fixed inset-0 -z-10 bg-grid-pattern-page" />
 
       <div className="mx-auto w-full max-w-6xl px-6">
-        {/* ---- First screen: nav + hero + upload card, no scrolling ----
-            .upload-screen is a 100dvh flex column; the body centers the hero
-            and card in whatever height is left after the nav. All vertical
-            gaps are vh-clamped in design-tokens.css, so this one layout fits
-            768px laptops and 1080p desktops without breakpoint forks. */}
         <div className="upload-screen">
           <SiteNav />
 
@@ -412,57 +429,76 @@ export default function UploadPage() {
             <Reveal>
               <section className="text-center">
                 <span className="pill-label" style={{ transform: "rotate(-1deg)" }}>
-                  AI Powered · Data Driven · Insights Focused
+                  <SparkIcon size={12} />
+                  AI Powered · Data Driven
                 </span>
-                <h1 className="display-heading mx-auto mt-[clamp(0.75rem,2vh,1.5rem)] max-w-2xl text-[clamp(2.1rem,5.2vh,3.5rem)]">
-                  Upload Your{" "}
-                  <span className="italic underline decoration-mustard decoration-[6px] underline-offset-[8px]">
-                    Dataset
+                <h1 className="headline mx-auto mt-[clamp(0.75rem,2vh,1.5rem)] max-w-2xl text-[clamp(2.3rem,5.6vh,3.75rem)] uppercase">
+                  Upload your{" "}
+                  <span className="relative inline-block whitespace-nowrap text-ink">
+                    dataset
+                    <svg
+                      viewBox="0 0 220 18"
+                      className="pointer-events-none absolute -bottom-1.5 left-0 h-[0.4em] w-full"
+                      preserveAspectRatio="none"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M2 12 C 55 4, 165 4, 218 12"
+                        fill="none"
+                        stroke="var(--color-mustard)"
+                        strokeWidth="7"
+                        strokeLinecap="round"
+                      />
+                    </svg>
                   </span>
                 </h1>
+                <p className="font-body mx-auto mt-4 max-w-md text-[0.95rem] text-muted">
+                  Drop in a CSV and we&apos;ll clean, analyze, and model it for you.
+                </p>
               </section>
             </Reveal>
 
-            {/* ---- Upload card ---- */}
+            {/* ---- Upload panel — single box, content swaps by stage ---- */}
             <Reveal delay={80}>
-              <section>
-                <div className="card-elevated mx-auto max-w-2xl p-[clamp(0.7rem,1.6vh,1.15rem)]">
-                  {stage === "analyzing" ? (
-                    <AnalyzingPanel fileName={selectedFile?.name} />
-                  ) : (
-                    /* Premium upload surface — solid ink border + hard shadow
-                       (not a dashed rectangle), sitting inside the card. */
-                    <div
-                      onClick={() => !isBusy && inputRef.current?.click()}
-                      onDragOver={(event) => {
-                        event.preventDefault();
-                        if (!isBusy) setIsDragging(true);
-                      }}
-                      onDragLeave={() => setIsDragging(false)}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        setIsDragging(false);
-                        handleFile(event.dataTransfer.files?.[0]);
-                      }}
-                      className={[
-                        "upload-surface group",
-                        isDragging ? "is-dragging" : "",
-                        isBusy ? "is-busy" : "",
-                      ].join(" ")}
-                    >
-                      <input
-                        ref={inputRef}
-                        type="file"
-                        accept=".csv"
-                        className="sr-only"
-                        aria-label="Choose a CSV file to upload"
-                        onChange={(event) => handleFile(event.target.files?.[0])}
-                      />
+              <section className="mx-auto w-full max-w-2xl">
+                <div
+                  onClick={() => isIdleOrUploading && !isBusy && inputRef.current?.click()}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    if (isIdleOrUploading && !isBusy) setIsDragging(true);
+                  }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setIsDragging(false);
+                    if (isIdleOrUploading) handleFile(event.dataTransfer.files?.[0]);
+                  }}
+                  className={[
+                    "upload-panel group",
+                    isIdleOrUploading && !isBusy ? "is-interactive" : "",
+                    isDragging ? "is-dragging" : "",
+                    stage === "error" ? "is-error" : "",
+                  ].join(" ")}
+                >
+                  <input
+                    ref={inputRef}
+                    type="file"
+                    accept=".csv"
+                    className="sr-only"
+                    aria-label="Choose a CSV file to upload"
+                    onChange={(event) => handleFile(event.target.files?.[0])}
+                  />
 
-                      {/* ---- Upload / success icon ---- */}
+                  {stage === "analyzing" && <AnalyzingState fileName={selectedFile?.name} />}
+
+                  {stage === "error" && error && (
+                    <ErrorState message={error} fileName={selectedFile?.name} onRetry={resetToIdle} />
+                  )}
+
+                  {isIdleOrUploading && (
+                    <div className="relative flex flex-col items-center gap-5 text-center">
+                      {/* ---- Icon ---- */}
                       <span className="relative inline-flex shrink-0">
-                        {/* Halo breathes on its own element so the badge keeps
-                            its transform free for the hover lift. */}
                         {!isBusy && (
                           <span
                             aria-hidden="true"
@@ -473,23 +509,19 @@ export default function UploadPage() {
                           key={isUploadComplete ? "done" : "idle"}
                           className="icon-badge upload-badge relative bg-mustard text-ink animate-badge-pop"
                         >
-                          {isUploadComplete ? (
-                            <CheckIcon size={34} />
-                          ) : (
-                            <CloudUploadIcon size={34} />
-                          )}
+                          {isUploadComplete ? <CheckIcon size={34} /> : <CloudUploadIcon size={34} />}
                         </span>
                       </span>
 
                       {/* ---- Heading + description ---- */}
                       <div key={isUploadComplete ? "copy-done" : "copy-idle"} className="animate-state-fade">
-                        <h2 className="display-heading text-[clamp(1.4rem,3.4vh,2.15rem)]">
+                        <h2 className="headline text-[clamp(1.45rem,3.6vh,2.25rem)]">
                           {isUploadComplete ? "CSV uploaded successfully" : "Upload your dataset"}
                         </h2>
-                        <p className="mx-auto mt-[clamp(0.35rem,1vh,0.7rem)] max-w-[500px] text-[clamp(0.8rem,1.6vh,0.95rem)] leading-snug text-muted">
+                        <p className="font-body mx-auto mt-2 max-w-[420px] text-[clamp(0.8rem,1.6vh,0.95rem)] leading-snug text-muted">
                           {isUploadComplete
                             ? "Ready for AI analysis — hang tight while we get started."
-                            : "Our AI analyzes, cleans, and visualizes your data, then recommends the best model."}
+                            : "Analyzed, cleaned, and visualized, with the best model recommended for you."}
                         </p>
                       </div>
 
@@ -521,9 +553,12 @@ export default function UploadPage() {
                         </div>
                       )}
 
-                      {/* ---- Selected file card ---- */}
-                      {selectedFile && !error && (
-                        <div className="w-full max-w-sm rounded-[14px] border-2 border-ink bg-cream-card p-2.5 text-left shadow-[var(--shadow-hard-sm)] animate-state-fade">
+                      {/* ---- Selected file meta ---- */}
+                      {selectedFile && (
+                        <div
+                          className="w-full max-w-sm rounded-[14px] border-2 border-ink bg-cream p-2.5 text-left animate-state-fade"
+                          style={{ boxShadow: "var(--shadow-hard-sm)" }}
+                        >
                           <div className="flex items-center gap-2.5">
                             <span className="icon-chip">
                               <FileIcon />
@@ -584,7 +619,7 @@ export default function UploadPage() {
                               style={{ width: `${uploadProgress}%` }}
                             />
                           </div>
-                          <p className="mt-1.5 text-xs text-muted">
+                          <p className="font-body mt-1.5 text-xs text-muted">
                             {isUploadComplete
                               ? "Handing off to the analysis engine…"
                               : `${formatBytes(
@@ -595,36 +630,15 @@ export default function UploadPage() {
                       )}
 
                       {/* ---- Constraints ---- */}
-                      <div className="flex flex-wrap items-center justify-center gap-2">
-                        <span className="pill-label pill-label-ghost">
-                          <FileIcon size={12} />
-                          .CSV only
-                        </span>
-                        <span className="pill-label pill-label-ghost">Max 50 MB</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* ---- Error card ---- */}
-                  {stage === "error" && error && (
-                    <div
-                      role="alert"
-                      className="mt-3 flex flex-col items-start gap-3 rounded-[14px] border-2 border-ink bg-cream-sunken p-4 animate-state-fade sm:flex-row sm:items-center"
-                    >
-                      <span className="icon-badge h-11 w-11 shrink-0 bg-mustard text-ink">
-                        <WarningIcon />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="font-display text-base font-bold text-ink">Upload failed</div>
-                        <p className="mt-0.5 text-sm text-muted">{error}</p>
-                      </div>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm shrink-0"
-                        onClick={resetToIdle}
-                      >
-                        Try again
-                      </button>
+                      {!selectedFile && (
+                        <div className="flex flex-wrap items-center justify-center gap-2">
+                          <span className="pill-label pill-label-ghost">
+                            <FileIcon size={12} />
+                            .CSV only
+                          </span>
+                          <span className="pill-label pill-label-ghost">Max 50 MB</span>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -632,9 +646,6 @@ export default function UploadPage() {
             </Reveal>
           </div>
 
-          {/* Scroll affordance — the first screen is intentionally self-contained,
-              so this is the only cue that supporting content follows. Hidden on
-              short viewports where it would compete for the fold. */}
           <div className="hidden shrink-0 justify-center pb-3 lg:flex">
             <span className="label-mono text-[9px] animate-float">↓ More below</span>
           </div>
@@ -662,8 +673,8 @@ export default function UploadPage() {
                     </svg>
                   </span>
                   <div>
-                    <div className="text-sm font-bold text-ink">{item.title}</div>
-                    <p className="mt-1 text-xs text-muted">{item.body}</p>
+                    <div className="font-body text-sm font-bold text-ink">{item.title}</div>
+                    <p className="font-body mt-1 text-xs text-muted">{item.body}</p>
                   </div>
                 </div>
               ))}
@@ -675,20 +686,20 @@ export default function UploadPage() {
         <Reveal delay={160}>
           <section className="mt-14 text-center">
             <span className="label-mono">How It Works</span>
-            <h2 className="display-heading mt-3 text-3xl font-bold">
+            <h2 className="headline mt-3 text-3xl">
               From upload to{" "}
-              <span className="italic text-mustard">insights</span> in four
-              steps.
+              <span className="italic text-mustard" style={{ WebkitTextStroke: "0.5px var(--color-ink)" }}>
+                insights
+              </span>{" "}
+              in four steps.
             </h2>
 
             <div className="relative mt-12">
-              {/* Dashed connector line — same as Home's How It Works */}
               <div className="absolute left-0 right-0 top-7 hidden h-0.5 border-t-2 border-dashed border-line lg:block" />
 
               <div className="grid grid-cols-2 gap-x-6 gap-y-10 sm:grid-cols-2 lg:grid-cols-4">
                 {STEPS.map((step, i) => (
                   <Reveal key={step.num} delay={i * 80} className="group relative">
-                    {/* icon-badge — same hover lift/color as Home */}
                     <div className="icon-badge relative z-10 text-ink mx-auto">
                       <svg
                         width="24"
@@ -703,15 +714,14 @@ export default function UploadPage() {
                       >
                         {step.icon}
                       </svg>
-                      {/* Mustard numbered badge with border */}
                       <span className="absolute -left-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-ink bg-mustard font-mono text-[9px] font-bold text-ink">
                         {step.num}
                       </span>
                     </div>
-                    <div className="mt-4 font-display text-sm font-bold text-ink">
+                    <div className="mt-4 font-body text-sm font-bold text-ink">
                       {step.title}
                     </div>
-                    <p className="mt-1 text-xs leading-snug text-muted mx-auto max-w-[10rem]">
+                    <p className="font-body mt-1 text-xs leading-snug text-muted mx-auto max-w-[10rem]">
                       {step.body}
                     </p>
                   </Reveal>
@@ -742,10 +752,10 @@ export default function UploadPage() {
                 </svg>
               </span>
               <div>
-                <div className="text-sm font-bold text-ink">
+                <div className="font-body text-sm font-bold text-ink">
                   Your data is secure and private.
                 </div>
-                <p className="mt-1 text-xs text-muted">
+                <p className="font-body mt-1 text-xs text-muted">
                   We never share your data with anyone.
                 </p>
               </div>

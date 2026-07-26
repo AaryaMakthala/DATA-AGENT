@@ -230,9 +230,9 @@ export default function Home() {
 
         {/* ---- Hero (kept short on purpose: the ticker band below must be
              visible without scrolling on a typical viewport) ---- */}
-        <section className="grid grid-cols-1 items-center gap-8 pb-6 pt-8 lg:grid-cols-[1.05fr_0.95fr] lg:pb-8 lg:pt-12">
+        <section className="grid grid-cols-1 items-center gap-8 pb-6 pt-10 lg:grid-cols-[1.05fr_0.95fr] lg:pb-7 lg:pt-14">
           <div>
-            <div className="mb-5 flex flex-wrap items-center gap-3 animate-fade-in-up">
+            <div className="mb-6 flex flex-wrap items-center gap-3 animate-fade-in-up">
               <span className="pill-label" style={{ transform: "rotate(-2deg)" }}>
                 AI Powered <ArrowIcon />
               </span>
@@ -264,7 +264,7 @@ export default function Home() {
             </div>
           </div>
 
-          <Reveal delay={150}>
+          <Reveal delay={150} className="lg:mt-6">
             <div className="relative mx-auto w-full max-w-sm py-2">
               {/* Soft blurred grounding shadow — gives the illustration depth without
                   the colored spotlight glow that was removed earlier. */}
@@ -314,6 +314,7 @@ export default function Home() {
             </div>
           </Reveal>
         </section>
+
       </div>
 
       {/*
@@ -322,7 +323,7 @@ export default function Home() {
         shows bare ink background, no matter how wide the viewport is.
         Two identical sets + translateX(-50%) = a seamless, gap-free loop.
       */}
-      <section className="mt-10 overflow-hidden border-y-2 border-ink bg-ink py-3 lg:mt-14">
+      <section className="mt-12 overflow-hidden border-y-2 border-ink bg-ink py-3 lg:mt-16">
         <div className="flex animate-marquee">
           <div className="flex w-full shrink-0 items-center justify-around gap-10">
             {TICKER_ITEMS.map((item, i) => (

@@ -37,7 +37,10 @@ const NAV_LINKS = [
 ];
 
 /** Top navigation bar, identical on every page. `active` picks which link
- * renders as the black pill. */
+ * renders as the black pill. Inactive links use `.nav-link`, which stays
+ * invisible until hover, then reveals a real bordered/hard-shadow button
+ * shape — matching the active pill's visual language instead of just
+ * changing text color. */
 export function SiteNav({ active }: { active?: string }) {
   return (
     <header className="flex items-center justify-between border-b border-line py-5">
@@ -55,18 +58,14 @@ export function SiteNav({ active }: { active?: string }) {
         </div>
       </Link>
 
-      <nav className="hidden items-center gap-2 md:flex">
+      <nav className="hidden items-center gap-1.5 md:flex">
         {NAV_LINKS.map((link) =>
           link.label === active ? (
             <Link key={link.label} href={link.href} className="nav-pill">
               {link.label}
             </Link>
           ) : (
-            <Link
-              key={link.label}
-              href={link.href}
-              className="label-mono px-3 py-2 transition-colors hover:text-ink"
-            >
+            <Link key={link.label} href={link.href} className="nav-link">
               {link.label}
             </Link>
           ),
