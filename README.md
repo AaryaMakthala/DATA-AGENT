@@ -1,8 +1,27 @@
+<div align="center">
+
 # Data Agent
 
-**Your Personal Data Analyst and Data Cleaner**
+### Your Personal Data Analyst and Data Cleaner
 
-Data Agent is an AI-powered data analysis platform that automatically profiles uploaded datasets, detects data quality issues, identifies likely prediction targets, recommends suitable machine learning algorithms, generates visual insights, and provides AI-assisted cleaning recommendations. It combines data profiling, machine learning intelligence, visualization, and LLM-powered explanations into a single application, allowing anyone to upload a dataset and receive a complete analysis without manually performing the traditional data analysis workflow.
+Data Agent is an AI-powered data analysis platform that automatically profiles uploaded datasets, detects data quality issues, identifies likely prediction targets, recommends suitable machine learning algorithms, generates visual insights, and provides AI-assisted cleaning recommendations — all from a single CSV upload.
+
+[Live Demo](https://data-analyst-agent-topaz.vercel.app) &nbsp;•&nbsp; [Report Bug](https://github.com/AaryaMakthala/DATA-AGENT/issues) &nbsp;•&nbsp; [Request Feature](https://github.com/AaryaMakthala/DATA-AGENT/issues)
+
+<br/>
+
+![Next.js](https://img.shields.io/badge/Next.js%2015-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)
+![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
+![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Pandas](https://img.shields.io/badge/Pandas-150458?style=for-the-badge&logo=pandas&logoColor=white)
+![NumPy](https://img.shields.io/badge/NumPy-013243?style=for-the-badge&logo=numpy&logoColor=white)
+![LangChain](https://img.shields.io/badge/LangGraph-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white)
+![Vercel](https://img.shields.io/badge/Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)
+
+</div>
 
 ---
 
@@ -12,7 +31,7 @@ Data Agent is an AI-powered data analysis platform that automatically profiles u
 - [Core Workflow](#core-workflow)
 - [Key Features](#key-features)
 - [Technology Stack](#technology-stack)
-- [Architecture](#architecture)
+- [System Architecture](#system-architecture)
 - [Getting Started](#getting-started)
 - [Project Structure](#project-structure)
 - [Environment Variables](#environment-variables)
@@ -24,7 +43,7 @@ Data Agent is an AI-powered data analysis platform that automatically profiles u
 
 ## Overview
 
-Data Agent simplifies the workflow of a data analyst. A user uploads a CSV file, and the system runs it through an automated pipeline that:
+Data Agent simplifies the traditional workflow of a data analyst. A user uploads a CSV file, and the system runs it through an automated pipeline that:
 
 1. Profiles the dataset (row/column counts, data types, missing values, duplicates, outliers)
 2. Detects columns that should be excluded from modeling (identifiers, GUIDs, indexes)
@@ -35,7 +54,9 @@ Data Agent simplifies the workflow of a data analyst. A user uploads a CSV file,
 7. Produces an interactive dashboard of charts and visualizations
 8. Applies AI-recommended cleaning steps to produce a cleaned, model-ready dataset
 
-The goal is to make rigorous, explainable data analysis accessible to users without deep data science expertise.
+The goal is to make rigorous, explainable data analysis accessible to anyone, without requiring deep data science expertise.
+
+A core design principle behind the system is that **the LLM never sees raw data**. Only a compact statistical profile of the dataset is passed to the language model, which keeps costs, latency, and data exposure to a minimum while all actual data manipulation is performed deterministically in Python.
 
 ---
 
@@ -48,137 +69,223 @@ Upload CSV Dataset
 Dataset Profiling
         |
         v
-Data Quality Analysis
+Target Detection (on original, unencoded data)
         |
         v
-Identifier Detection
+Dataset Validation
         |
         v
-Target Column Detection
+   Valid? ----------- No ---> Invalid Dataset Report
+        |
+       Yes
         |
         v
-Problem Type Classification
+Parallel LLM Execution
+   (Dataset Analysis + Cleaning Strategy)
         |
         v
-Algorithm Recommendation
+Python Cleaning Engine
         |
         v
-AI Analysis Report
+Visualization (before one-hot encoding)
+        |
+        v
+ML Algorithm Recommendation
+        |
+        v
+Report + Charts + Cleaned CSV
         |
         v
 Interactive Dashboard
 ```
+
+Two design decisions are worth calling out:
+
+- **Target detection runs before preprocessing.** Encoding a categorical target (e.g. turning `Purchased` into `Purchased_Yes` / `Purchased_No`) destroys the semantic information needed to identify it, so detection always runs against the original dataframe.
+- **Visualizations are generated before one-hot encoding.** Encoded categorical columns produce unreadable, fragmented charts, so all charting happens on the cleaned-but-not-yet-encoded data.
 
 ---
 
 ## Key Features
 
 ### Automated Dataset Profiling
-
-The system analyzes uploaded CSV files and reports:
-
-- Row and column statistics
-- Data types
-- Missing value detection
-- Duplicate detection
-- Outlier analysis
-- Unique value analysis
-- Statistical summaries
+The system analyzes uploaded CSV files and reports row/column statistics, data types, missing values, duplicates, outliers, unique value counts, and statistical summaries — all without sending the raw file to any LLM.
 
 ### Intelligent Target Detection
-
-Rather than assuming the last column is the prediction target, the system uses a confidence-based scoring approach that evaluates column name meaning, business metric patterns, data type, cardinality, predictability, and general feature characteristics. Alternative target candidates are also surfaced with their own confidence scores.
+Rather than assuming the last column is the prediction target, the system uses a confidence-based scoring approach that evaluates column name semantics, business metric patterns, data type, cardinality, class imbalance, and general feature characteristics. Alternative target candidates are surfaced alongside their own confidence scores.
 
 ### Identifier Detection and Filtering
-
-Columns that should not participate in machine learning — such as customer IDs, employee IDs, transaction IDs, GUIDs, and record indexes — are automatically detected and excluded from feature reasoning, correlation analysis, and chart generation, preventing misleading recommendations.
+Columns that should never participate in machine learning — customer IDs, employee IDs, transaction IDs, GUIDs, and record indexes — are automatically detected and excluded from feature reasoning, correlation analysis, and chart generation.
 
 ### Machine Learning Algorithm Recommendation Engine
+Algorithms are recommended based on actual dataset characteristics — size, feature composition, categorical ratio, outlier presence, class imbalance, and structure — rather than a static ranking.
 
-Algorithms are recommended based on actual dataset characteristics (size, feature composition, categorical ratio, outlier presence, class imbalance, and structure) rather than a static ranking. Supported recommendations include:
+| Problem Type | Recommended Algorithms |
+|---|---|
+| Classification | Gradient Boosting, Random Forest, XGBoost, Logistic Regression, Support Vector Machine |
+| Regression | Gradient Boosting Regressor, Random Forest Regressor, XGBoost Regressor, Linear Regression |
 
-**Classification:** Gradient Boosting, Random Forest, XGBoost, Logistic Regression, Support Vector Machine
-
-**Regression:** Gradient Boosting Regressor, Random Forest Regressor, XGBoost Regressor, Linear Regression
-
-Each recommendation includes a confidence level and a plain-language explanation of why the model fits the dataset.
+Each recommendation includes a confidence score and a plain-language explanation of why the model fits the dataset.
 
 ### Data Quality and Cleaning Recommendations
-
-The system detects missing values, outliers, and duplicate records, and generates a cleaning strategy covering missing value handling, outlier treatment, categorical encoding, and column removal suggestions.
+The system detects missing values, outliers, and duplicate records, and generates a cleaning strategy covering imputation, outlier treatment, categorical encoding, and column removal. The LLM only produces the *plan* — every transformation is executed deterministically by the Python cleaning engine, so results are reproducible and free of hallucination.
 
 ### AI-Powered Analysis Reports
-
-An LLM generates natural-language insights describing patterns, correlations, data quality issues, and modeling considerations found in the dataset.
+An LLM generates natural-language insights describing patterns, correlations, data quality issues, and modeling considerations found in the dataset profile.
 
 ### Interactive Data Visualizations
+Charts are generated automatically, including histograms, box plots, scatter plots, correlation heatmaps, count plots, bar charts, missing value charts, and target distribution charts.
 
-Charts are generated automatically, including histograms, bar charts, scatter plots, correlation heatmaps, distribution charts, missing value charts, and target distribution charts.
+### Resilient Multi-Provider LLM Execution
+The two LLM calls in the pipeline — dataset analysis and cleaning plan generation — are independent and run concurrently via a thread pool rather than sequentially. If the primary provider fails, the system automatically falls back to the next configured provider with no user intervention required.
 
 ### ML Validation and Testing
-
-The project includes verification tests covering multiple dataset types (regression, classification with class imbalance, and invalid/single-class datasets) to confirm the pipeline correctly classifies problem type and rejects unusable data.
+The project includes verification tests covering multiple dataset types (regression, classification with class imbalance, and invalid or single-class datasets) to confirm the pipeline correctly classifies problem type and rejects unusable data.
 
 ---
 
 ## Technology Stack
 
-### Frontend
+<table>
+<tr>
+<td valign="top" width="50%">
 
-- Next.js 15
-- TypeScript
-- Tailwind CSS
-- React
-- Framer Motion
-- shadcn/ui
+**Frontend**
 
-### Backend
+![Next.js](https://img.shields.io/badge/Next.js-000000?style=flat-square&logo=nextdotjs&logoColor=white)
+![React](https://img.shields.io/badge/React-20232A?style=flat-square&logo=react&logoColor=61DAFB)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)
+![Framer](https://img.shields.io/badge/Framer_Motion-0055FF?style=flat-square&logo=framer&logoColor=white)
+![shadcn/ui](https://img.shields.io/badge/shadcn%2Fui-000000?style=flat-square&logo=shadcnui&logoColor=white)
+![Zod](https://img.shields.io/badge/Zod-3E67B1?style=flat-square&logo=zod&logoColor=white)
 
-- FastAPI
-- Python
-- Pandas
-- NumPy
-- Scikit-learn
+</td>
+<td valign="top" width="50%">
 
-### AI / Agent System
+**Backend**
 
-- LangGraph
-- LLM-based analysis workflow
-- Groq (primary provider)
-- Gemini (fallback provider)
-- OpenRouter (secondary fallback)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)
+![Uvicorn](https://img.shields.io/badge/Uvicorn-2A9D8F?style=flat-square&logo=gunicorn&logoColor=white)
+![Pydantic](https://img.shields.io/badge/Pydantic-E92063?style=flat-square&logo=pydantic&logoColor=white)
+![Pandas](https://img.shields.io/badge/Pandas-150458?style=flat-square&logo=pandas&logoColor=white)
+![NumPy](https://img.shields.io/badge/NumPy-013243?style=flat-square&logo=numpy&logoColor=white)
+![scikit-learn](https://img.shields.io/badge/scikit_learn-F7931E?style=flat-square&logo=scikitlearn&logoColor=white)
 
-### Data Processing
+</td>
+</tr>
+<tr>
+<td valign="top" width="50%">
 
-- Automated profiling
-- ML preprocessing pipeline
-- Algorithm recommendation engine
+**AI / Agent Orchestration**
+
+![LangChain](https://img.shields.io/badge/LangGraph-1C3C3C?style=flat-square&logo=langchain&logoColor=white)
+![Google Gemini](https://img.shields.io/badge/Gemini-8E75B2?style=flat-square&logo=googlegemini&logoColor=white)
+![Groq](https://img.shields.io/badge/Groq-F55036?style=flat-square&logo=groq&logoColor=white)
+![OpenRouter](https://img.shields.io/badge/OpenRouter-000000?style=flat-square&logo=openai&logoColor=white)
+
+</td>
+<td valign="top" width="50%">
+
+**Auth & Deployment**
+
+![Supabase](https://img.shields.io/badge/Supabase-3FCF8E?style=flat-square&logo=supabase&logoColor=white)
+![Vercel](https://img.shields.io/badge/Vercel-000000?style=flat-square&logo=vercel&logoColor=white)
+![Render](https://img.shields.io/badge/Render-46E3B7?style=flat-square&logo=render&logoColor=white)
+
+</td>
+</tr>
+</table>
+
+| Technology | Role in the Project |
+|---|---|
+| Next.js 15 (App Router) | Frontend framework and routing |
+| React | Interactive UI components |
+| TypeScript | Type safety across the frontend |
+| Tailwind CSS | Styling system |
+| Framer Motion | Animations and pipeline loading states |
+| shadcn/ui | Reusable, accessible UI primitives |
+| React Hook Form + Zod | Form handling and schema validation |
+| FastAPI | REST API layer |
+| Uvicorn | ASGI server |
+| Pydantic | Request/response validation and configuration |
+| Pandas / NumPy | Dataset loading, profiling, and cleaning |
+| scikit-learn | Machine learning utilities for algorithm recommendation |
+| LangGraph | State-machine orchestration of the AI pipeline |
+| Google Gemini | Primary LLM provider |
+| Groq | First fallback LLM provider |
+| OpenRouter | Second fallback LLM provider |
+| Python `ThreadPoolExecutor` | Concurrent execution of independent LLM calls |
+| Supabase | Authentication |
+| Vercel | Frontend deployment |
+| Render | Backend deployment |
 
 ---
 
-## Architecture
+## System Architecture
 
 ```
-                 User
-                  |
-                  v
-          Next.js Frontend
-                  |
-                  v
-             FastAPI API
-                  |
-                  v
-          LangGraph Workflow
-                  |
-     +------------+------------+
-     |            |            |
-     v            v            v
-Profiler   ML Analyzer   LLM Agent
-     |            |            |
-Data Stats  Recommendations  Reports
-                  |
-                  v
-          Interactive Dashboard
+                            User
+                             |
+                             v
+                     Next.js Frontend
+                             |
+                         POST /upload
+                             v
+                      FastAPI Backend
+                             |
+                             v
+                    LangGraph AI Pipeline
+                             |
+                             v
+                 +-----------------------+
+                 |   Dataset Profiler    |
+                 +-----------------------+
+                             |
+                             v
+                 +-----------------------+
+                 | Target Detection Node |
+                 |  (on original data)   |
+                 +-----------------------+
+                             |
+                             v
+                 +-----------------------+
+                 |    Validation Node    |
+                 +-----------------------+
+                             |
+                     Valid dataset?
+                    /                \
+                  No                 Yes
+                  |                    |
+                  v                    v
+        Invalid Dataset Report   Parallel LLM Execution
+                                        |
+                          +-------------+-------------+
+                          |                           |
+                          v                           v
+                 AI Dataset Analysis         AI Cleaning Strategy
+                          |                           |
+                          +-------------+-------------+
+                                        v
+                            Python Cleaning Engine
+                             (deterministic, no LLM)
+                                        |
+                                        v
+                          Visualization Generator
+                        (runs before one-hot encoding)
+                                        |
+                                        v
+                        ML Recommendation Engine
+                                        |
+                                        v
+                     Report JSON + Charts + Cleaned CSV
+                                        |
+                                        v
+                            FastAPI Response
+                                        |
+                                        v
+                        Next.js Interactive Dashboard
 ```
 
 The LangGraph workflow runs the following node sequence:
@@ -190,9 +297,17 @@ START -> Profiler Node -> Target Detection Node -> Validation Node
       -> ML Recommendation Node -> END
 ```
 
-If the validation node determines the dataset or detected target is unusable (for example, a single-class target), the workflow routes directly to `END` without invoking the LLM, cleaning, or visualization steps.
+If the validation node determines the dataset or detected target is unusable (for example, a single-class target), the workflow routes directly to `END` without invoking the LLM, cleaning, or visualization steps, and the frontend displays a clear invalid-dataset state instead of crashing.
 
-The two LLM calls in the workflow (analysis report generation and cleaning plan generation) are independent of one another and are executed concurrently rather than sequentially, since each depends only on the dataset profile and writes to a disjoint piece of state.
+**Why this architecture holds up:**
+
+- **Privacy-first** — the LLM only ever receives a dataset profile, never the raw CSV, minimizing exposure of user data.
+- **Deterministic processing** — AI decides *what* to do, while Python performs the actual cleaning, keeping results consistent and reproducible.
+- **Modular workflow** — LangGraph separates every stage into an independent node, making the pipeline easy to extend, test, and debug.
+- **Concurrent execution** — dataset analysis and cleaning-plan generation run in parallel via a thread pool, cutting overall processing time.
+- **Graceful failure handling** — validation catches invalid datasets early, and the frontend surfaces meaningful error states.
+- **Provider resilience** — automatic fallback across Gemini, Groq, and OpenRouter keeps the application functional if one provider is unavailable.
+- **No database required** — every upload is temporary and outputs are stored as files, which keeps deployment simple.
 
 ---
 
@@ -237,12 +352,22 @@ data-agent/
 │   │   ├── api/              # FastAPI route definitions
 │   │   ├── services/         # File handling and CSV validation services
 │   │   ├── tools/            # Profiler, cleaner, visualizer, ML recommender
-│   │   └── utils/            # Logging and shared utilities
+│   │   ├── llm/               # LLM provider clients and fallback logic
+│   │   ├── models/            # Pydantic schemas
+│   │   └── utils/             # Logging and shared utilities
 │   ├── tests/                 # Verification and validation tests
-│   └── test_fixtures/         # Sample datasets used in testing
+│   ├── test_fixtures/         # Sample datasets used in testing
+│   ├── uploads/                # Temporary uploaded files
+│   ├── outputs/
+│   │   ├── charts/             # Generated chart images
+│   │   ├── reports/             # Generated JSON analysis reports
+│   │   └── cleaned_files/       # Cleaned, model-ready datasets
+│   └── requirements.txt
 ├── frontend/
-│   ├── app/                   # Next.js pages and routes
-│   ├── components/            # React components and UI elements
+│   ├── app/                    # Next.js pages and routes
+│   ├── components/             # React components and UI elements
+│   ├── hooks/                  # Custom React hooks
+│   ├── lib/                    # Client utilities and API helpers
 │   └── types/                  # TypeScript type definitions
 └── README.md
 ```
@@ -275,16 +400,25 @@ Tests cover target detection, problem type classification, class imbalance handl
 
 ## Roadmap
 
-Planned areas of future work include:
-
-- Caching of profiling results to avoid redundant computation on repeated dataset views
-- Support for larger datasets through sampling-based profiling
-- Expanded chart types, including box plots and target distribution charts
-- Additional safeguards for numeric identifier columns that do not follow standard naming patterns
-- Persistent storage for uploaded and cleaned datasets
+- [ ] Asynchronous background processing via a task queue (Celery, Dramatiq, or RQ)
+- [ ] Caching of dataset profiles to avoid recomputing results for identical uploads
+- [ ] Interactive Plotly-based charts in place of static PNG images
+- [ ] User authentication and persistent analysis history
+- [ ] Explainable AI via SHAP feature importance for recommended models
+- [ ] Support for Excel, Parquet, JSON, and compressed archive formats
+- [ ] Data quality trend reports across multiple uploads
+- [ ] Dockerized backend for consistent deployment across platforms
+- [ ] Expanded automated test coverage across the full pipeline
+- [ ] Upload security hardening: virus scanning, size limits, and stricter file-ID validation
 
 ---
 
 ## License
 
 This project is currently unlicensed. Add a license file if you intend to distribute or open-source this project.
+
+<div align="center">
+
+Built by [Aarya Makthala](https://github.com/AaryaMakthala)
+
+</div>
