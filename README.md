@@ -10,6 +10,9 @@ Data Agent is an AI-powered data analysis platform that automatically profiles u
 
 <br/>
 
+Server is starting... This app is hosted on Render's free plan, so the first load may take 2–3 minutes. Thank you for your patience!
+
+
 ![Next.js](https://img.shields.io/badge/Next.js%2015-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)
 ![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
