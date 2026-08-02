@@ -1,6 +1,6 @@
 <div align="center">
 
-# Data Agent
+# DATA AGENT
 
 ### Your Personal Data Analyst and Data Cleaner
 
@@ -10,8 +10,9 @@ Data Agent is an AI-powered data analysis platform that automatically profiles u
 
 <br/>
 
-Server is starting... This app is hosted on Render's free plan, so the first load may take 2–3 minutes. Thank you for your patience!
+> Server is starting... This app is hosted on Render's free plan, so the first load may take 2–3 minutes. Thank you for your patience!
 
+<br/>
 
 ![Next.js](https://img.shields.io/badge/Next.js%2015-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)
 ![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
@@ -31,10 +32,10 @@ Server is starting... This app is hosted on Render's free plan, so the first loa
 ## Table of Contents
 
 - [Overview](#overview)
+- [System Architecture](#system-architecture)
 - [Core Workflow](#core-workflow)
 - [Key Features](#key-features)
 - [Technology Stack](#technology-stack)
-- [System Architecture](#system-architecture)
 - [Getting Started](#getting-started)
 - [Project Structure](#project-structure)
 - [Environment Variables](#environment-variables)
@@ -60,6 +61,70 @@ Data Agent simplifies the traditional workflow of a data analyst. A user uploads
 The goal is to make rigorous, explainable data analysis accessible to anyone, without requiring deep data science expertise.
 
 A core design principle behind the system is that **the LLM never sees raw data**. Only a compact statistical profile of the dataset is passed to the language model, which keeps costs, latency, and data exposure to a minimum while all actual data manipulation is performed deterministically in Python.
+
+---
+
+## System Architecture
+
+```mermaid
+graph TD
+    classDef client fill:#3b82f6,stroke:#1d4ed8,stroke-width:2px,color:#fff;
+    classDef aiNode fill:#8b5cf6,stroke:#6d28d9,stroke-width:2px,color:#fff;
+    classDef pyNode fill:#10b981,stroke:#047857,stroke-width:2px,color:#fff;
+    classDef decision fill:#64748b,stroke:#475569,stroke-width:2px,color:#fff;
+    classDef output fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#fff;
+
+    User(["User Uploads CSV"]):::client
+    Frontend["Next.js Frontend"]:::client
+    API["FastAPI Backend<br/>POST /upload"]:::client
+
+    subgraph LG [LangGraph AI Pipeline]
+        Profiler["1. Dataset Profiler Node<br/>stats, types, missing, outliers"]:::pyNode
+        TargetDetect["2. Target Detection Node<br/>on original, unencoded data"]:::aiNode
+        Validate{"3. Validation Node"}:::decision
+        LLMAnalysis["4a. AI Dataset Analysis"]:::aiNode
+        LLMClean["4b. AI Cleaning Strategy"]:::aiNode
+        Cleaner["5. Python Cleaning Engine<br/>deterministic, no LLM"]:::pyNode
+        Viz["6. Visualization Node<br/>before one-hot encoding"]:::pyNode
+        MLRec["7. ML Recommendation Node"]:::pyNode
+    end
+
+    Invalid["Invalid Dataset Report"]:::output
+    Report["Report JSON + Charts<br/>+ Cleaned CSV"]:::output
+    Dashboard["Interactive Dashboard"]:::client
+
+    User --> Frontend --> API --> Profiler
+    Profiler --> TargetDetect --> Validate
+    Validate -- "Invalid" --> Invalid --> Dashboard
+    Validate -- "Valid" --> LLMAnalysis
+    Validate -- "Valid" --> LLMClean
+    LLMAnalysis --> Cleaner
+    LLMClean --> Cleaner
+    Cleaner --> Viz --> MLRec --> Report --> Dashboard
+```
+
+The LangGraph workflow runs the following node sequence:
+
+```
+START -> Profiler Node -> Target Detection Node -> Validation Node
+      -> LLM Node (analysis + cleaning plan, run concurrently)
+      -> Python Cleaning Node -> Visualization Node
+      -> ML Recommendation Node -> END
+```
+
+If the validation node determines the dataset or detected target is unusable (for example, a single-class target), the workflow routes directly to `END` without invoking the LLM, cleaning, or visualization steps, and the frontend displays a clear invalid-dataset state instead of crashing.
+
+**Why this architecture holds up:**
+
+| Principle | How it's achieved |
+|---|---|
+| Privacy-first | The LLM only ever receives a dataset profile, never the raw CSV |
+| Deterministic processing | AI decides *what* to do; Python performs the *actual* cleaning |
+| Modular workflow | LangGraph separates every stage into an independent, testable node |
+| Concurrent execution | Dataset analysis and cleaning-plan generation run in parallel via a thread pool |
+| Graceful failure handling | Validation catches invalid datasets early, surfacing meaningful error states |
+| Provider resilience | Automatic fallback across Gemini -> Groq -> OpenRouter |
+| No database required | Every upload is temporary; outputs are stored as files, keeping deployment simple |
 
 ---
 
@@ -226,94 +291,6 @@ The project includes verification tests covering multiple dataset types (regress
 
 ---
 
-## System Architecture
-
-```
-                            User
-                             |
-                             v
-                     Next.js Frontend
-                             |
-                         POST /upload
-                             v
-                      FastAPI Backend
-                             |
-                             v
-                    LangGraph AI Pipeline
-                             |
-                             v
-                 +-----------------------+
-                 |   Dataset Profiler    |
-                 +-----------------------+
-                             |
-                             v
-                 +-----------------------+
-                 | Target Detection Node |
-                 |  (on original data)   |
-                 +-----------------------+
-                             |
-                             v
-                 +-----------------------+
-                 |    Validation Node    |
-                 +-----------------------+
-                             |
-                     Valid dataset?
-                    /                \
-                  No                 Yes
-                  |                    |
-                  v                    v
-        Invalid Dataset Report   Parallel LLM Execution
-                                        |
-                          +-------------+-------------+
-                          |                           |
-                          v                           v
-                 AI Dataset Analysis         AI Cleaning Strategy
-                          |                           |
-                          +-------------+-------------+
-                                        v
-                            Python Cleaning Engine
-                             (deterministic, no LLM)
-                                        |
-                                        v
-                          Visualization Generator
-                        (runs before one-hot encoding)
-                                        |
-                                        v
-                        ML Recommendation Engine
-                                        |
-                                        v
-                     Report JSON + Charts + Cleaned CSV
-                                        |
-                                        v
-                            FastAPI Response
-                                        |
-                                        v
-                        Next.js Interactive Dashboard
-```
-
-The LangGraph workflow runs the following node sequence:
-
-```
-START -> Profiler Node -> Target Detection Node -> Validation Node
-      -> LLM Node (analysis + cleaning plan, run concurrently)
-      -> Python Cleaning Node -> Visualization Node
-      -> ML Recommendation Node -> END
-```
-
-If the validation node determines the dataset or detected target is unusable (for example, a single-class target), the workflow routes directly to `END` without invoking the LLM, cleaning, or visualization steps, and the frontend displays a clear invalid-dataset state instead of crashing.
-
-**Why this architecture holds up:**
-
-- **Privacy-first** — the LLM only ever receives a dataset profile, never the raw CSV, minimizing exposure of user data.
-- **Deterministic processing** — AI decides *what* to do, while Python performs the actual cleaning, keeping results consistent and reproducible.
-- **Modular workflow** — LangGraph separates every stage into an independent node, making the pipeline easy to extend, test, and debug.
-- **Concurrent execution** — dataset analysis and cleaning-plan generation run in parallel via a thread pool, cutting overall processing time.
-- **Graceful failure handling** — validation catches invalid datasets early, and the frontend surfaces meaningful error states.
-- **Provider resilience** — automatic fallback across Gemini, Groq, and OpenRouter keeps the application functional if one provider is unavailable.
-- **No database required** — every upload is temporary and outputs are stored as files, which keeps deployment simple.
-
----
-
 ## Getting Started
 
 ### Prerequisites
@@ -419,6 +396,8 @@ Tests cover target detection, problem type classification, class imbalance handl
 ## License
 
 This project is currently unlicensed. Add a license file if you intend to distribute or open-source this project.
+
+---
 
 <div align="center">
 
