@@ -115,6 +115,6 @@ app.mount("/charts", StaticFiles(directory=Config.CHARTS_FOLDER), name="charts")
 app.include_router(router)
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
