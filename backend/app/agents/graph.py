@@ -90,6 +90,44 @@ def _extract_json_object(text: str) -> str:
     return match.group(1) if match else text
 
 
+def _normalize_llm_content(raw: object) -> str:
+    """Coerce LLM response content to a plain string.
+
+    LangChain's ``BaseMessage.content`` is typed as
+    ``Union[str, List[Union[str, Dict]]]``.  Some providers / model versions
+    return a list of content blocks (e.g. ``[{"type": "text", "text": "..."}]``)
+    instead of a plain string.  Downstream code (``_extract_json_object``,
+    ``json.loads``) requires a ``str``, so this normalizer sits at the
+    boundary between the LLM router and the graph's parsing logic.
+
+    Returns the original string unchanged when ``raw`` is already a ``str``.
+    Raises ``TypeError`` for unsupported content shapes so a new provider
+    quirk surfaces immediately rather than silently producing garbage.
+    """
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, list):
+        parts: list[str] = []
+        for item in raw:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if text is None:
+                    raise TypeError(
+                        f"Unsupported LLM content block (no 'text' key): {item!r}"
+                    )
+                parts.append(str(text))
+            else:
+                raise TypeError(
+                    f"Unsupported LLM content list item type: {type(item).__name__}"
+                )
+        return "".join(parts)
+    raise TypeError(
+        f"Unsupported LLM response content type: {type(raw).__name__}"
+    )
+
+
 def profiler_node(state: AnalystState) -> dict:
     """Run the Python profiler on the uploaded CSV. No LLM involved.
 
@@ -210,6 +248,7 @@ def _run_analysis_llm(profile: dict) -> dict | str:
     prompt = build_analysis_prompt(profile)
     with log_duration(logger, "llm_analysis.generate (LLM call)"):
         raw = _router.generate(prompt)
+    raw = _normalize_llm_content(raw)
     try:
         return json.loads(_extract_json_object(raw))
     except json.JSONDecodeError:
@@ -227,6 +266,7 @@ def _run_cleaning_plan_llm(profile: dict) -> dict:
     prompt = build_cleaning_prompt(profile)
     with log_duration(logger, "cleaning_plan.generate (LLM call)"):
         raw = _router.generate(prompt)
+    raw = _normalize_llm_content(raw)
     try:
         return json.loads(_extract_json_object(raw))
     except json.JSONDecodeError:

@@ -13,7 +13,7 @@ load_dotenv(dotenv_path=BACKEND_DIR / ".env")
 class Config:
     """Central, read-only access point for environment-derived settings."""
 
-    # LLM provider keys (fallback chain order: Gemini -> Groq -> OpenRouter)
+    # LLM provider keys (fallback chain order: Groq -> Gemini -> OpenRouter)
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")

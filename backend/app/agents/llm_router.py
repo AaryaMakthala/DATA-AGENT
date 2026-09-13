@@ -53,7 +53,7 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 GEMINI_MODEL = "gemini-flash-latest"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "openai/gpt-oss-120b"
 OPENROUTER_MODEL = "openai/gpt-4o-mini"
 
 # Passed to each SDK so it doesn't wait forever on a slow network socket.
